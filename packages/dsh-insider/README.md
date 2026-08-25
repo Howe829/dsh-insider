@@ -14,4 +14,4 @@ dsh plugin --profile web add @howardchan/dsh-insider
 从旧包升级时，请先移除 `@howardchan/dsh-runtime`，再安装
 `@howardchan/dsh-insider`；已保存的图谱布局会继续复用。
 
-当前 `0.1.3` 构建面向 DSH `0.1.0-rc.8` 包族。
+当前 `0.1.4` 构建面向 DSH `0.1.0-rc.8` 包族。

@@ -22,12 +22,14 @@ Plugins、Fibers 和 Services 分布卡片会按状态与插件类型解释同�
 
 ### 关系图谱
 
-关系图谱将 DSH 插件与 Cordis 服务显示为不同类型的节点，并区分依赖、提供、
-消费、注入和缺失提供者等关系。
+关系图谱默认以 DSH 插件与 Cordis 服务为主，避免把每个运行时实例都铺满画布；
+选中插件或按 Fiber 状态筛选时，会按需展开对应 Fiber，并显示插件归属、父子 Fiber、
+注入和缺失提供者等关系。
 
 ![DSH 与 Cordis 运行时关系图谱](docs/images/runtime-relationship-graph.png)
 
-选中插件后可以查看它的运行时身份和关系邻域，也可以筛选出全部已注册的服务节点。
+选中插件后可以查看它的运行时身份、关系邻域和所属 Fiber，也可以直接从总览的 Fiber
+状态卡片定位等待中、活跃、已释放或失败的具体实例，而不是退化为插件状态筛选。
 
 <a href="docs/images/runtime-node-inspector.png"><img src="docs/images/runtime-node-inspector.png" width="49%" alt="聚焦插件节点与运行时详情面板"></a>
 <a href="docs/images/runtime-service-filter.png"><img src="docs/images/runtime-service-filter.png" width="49%" alt="全部 Cordis 服务节点"></a>

@@ -74,14 +74,19 @@ function RuntimeStatusTooltip({
 }
 
 export function RuntimeStatusCard({
-  title, unit, chartTitle, breakdown, t, onInspect,
+  kind, title, unit, chartTitle, breakdown, t, onInspect,
 }: {
+  kind: 'plugin' | 'fiber' | 'service'
   title: string
   unit: string
   chartTitle: string
   breakdown: RuntimeCollectionOverview | RuntimeServiceOverview
   t: Translate
-  onInspect: ((category: RuntimePluginCategory | undefined, status: RuntimeOverviewStatus) => void) | undefined
+  onInspect: ((
+    kind: 'plugin' | 'fiber' | 'service',
+    category: RuntimePluginCategory | undefined,
+    status: RuntimeOverviewStatus,
+  ) => void) | undefined
 }) {
   const rows: RuntimeChartRow[] = breakdown.byType.map(row => ({
     ...row,
@@ -104,7 +109,7 @@ export function RuntimeStatusCard({
       >
         {statusItems.map(({ key, label, Icon, color }) => (
           <li key={key} data-status={key}>
-            <button type="button" onClick={() => { onInspect?.(undefined, key) }}>
+            <button type="button" onClick={() => { onInspect?.(kind, undefined, key) }}>
               <span><Icon width={15} color={color} aria-hidden />{t(label)}</span>
               <strong>{breakdown.statuses[key].toLocaleString()}</strong>
             </button>
@@ -152,7 +157,7 @@ export function RuntimeStatusCard({
                       isAnimationActive={false}
                       onClick={(item) => {
                         const row = item.payload as RuntimeChartRow | undefined
-                        if (row !== undefined) onInspect?.(row.category, status.key)
+                        if (row !== undefined) onInspect?.(kind, row.category, status.key)
                       }}
                     />
                   ))}

@@ -6,19 +6,23 @@ import {
 } from '@heroicons/react/24/outline'
 import type { EdgeData, Graph, GraphOptions, IElementEvent, NodeData } from '@antv/g6'
 import type {
-  RuntimeFiberPhase, RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation,
+  RuntimeFiberPhase, RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode,
+  RuntimeGraphServiceRelation, RuntimeGraphSnapshot,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
-  buildRuntimeG6Data, runtimeG6CollisionRadius, runtimeG6DisplayLabel, runtimeG6EdgeMetadata, runtimeG6NodeMetadata,
+  buildRuntimeG6Data, renderRuntimeG6WithBudget, runtimeG6CollisionRadius, runtimeG6DisplayLabel,
+  runtimeG6EdgeMetadata, runtimeG6NodeMetadata,
   type RuntimeG6Focus, type RuntimeG6NodeCategory,
-  runtimeG6TopologyKey, syncRuntimeG6Data,
+  runtimeG6TopologyKey, runtimeG6VisualKey, syncRuntimeG6Data,
 } from './g6-graph.ts'
 import { loadG6 } from './g6-runtime.ts'
 import type { RuntimeGraphRelations, RuntimeGraphSavedPositions } from './graph.ts'
 import type { RuntimeLocaleKey } from './locales.ts'
 import type { RuntimeCategoryFilter } from './store.ts'
 import css from './RuntimeExplorer.module.css'
+
+type RuntimeGraphFiberNode = RuntimeGraphSnapshot['fibers'][number]
 
 const STATUS_COLORS = {
   pending: '#f3a62b',
@@ -36,14 +40,25 @@ const RELATION_COLORS = {
   related: '#5d626d',
 } as const
 
+const EDGE_LEGEND_COLORS = {
+  injects: '#555a64',
+  provides: '#22c55e',
+  owns: '#5eead4',
+  parent: '#5eead4',
+  dependency: RELATION_COLORS.dependency,
+  dependant: RELATION_COLORS.dependant,
+  missing: STATUS_COLORS.missing,
+} as const
+
 const NODE_CATEGORY_COLORS: Record<RuntimeG6NodeCategory, { fill: string; stroke: string }> = {
   core: { fill: '#3730a3', stroke: '#a5b4fc' },
   agent: { fill: '#6d28d9', stroke: '#c4b5fd' },
   model: { fill: '#1d4ed8', stroke: '#93c5fd' },
-  tool: { fill: '#047857', stroke: '#6ee7b7' },
+  tool: { fill: '#166534', stroke: '#4ade80' },
   session: { fill: '#b45309', stroke: '#fcd34d' },
   interface: { fill: '#be185d', stroke: '#f9a8d4' },
   extension: { fill: '#334155', stroke: '#94a3b8' },
+  fiber: { fill: '#0f766e', stroke: '#5eead4' },
   service: { fill: '#155e75', stroke: '#67e8f9' },
   missing: { fill: '#991b1b', stroke: '#fca5a5' },
 }
@@ -56,6 +71,7 @@ const NODE_CATEGORY_KEYS: Array<[Exclude<RuntimeG6NodeCategory, 'missing'>, Runt
   ['session', 'categorySession'],
   ['interface', 'categoryInterface'],
   ['extension', 'categoryExtension'],
+  ['fiber', 'fiberNode'],
   ['service', 'serviceNode'],
 ]
 
@@ -67,6 +83,7 @@ const NODE_CATEGORY_LOCALE_KEYS: Record<RuntimeG6NodeCategory, RuntimeLocaleKey>
   session: 'categorySession',
   interface: 'categoryInterface',
   extension: 'categoryExtension',
+  fiber: 'fiberNode',
   service: 'serviceNode',
   missing: 'missingService',
 }
@@ -74,6 +91,8 @@ const NODE_CATEGORY_LOCALE_KEYS: Record<RuntimeG6NodeCategory, RuntimeLocaleKey>
 const EDGE_LEGEND_ITEMS: Array<[string, RuntimeLocaleKey]> = [
   ['injects', 'edgeInjects'],
   ['provides', 'edgeProvides'],
+  ['owns', 'edgeOwns'],
+  ['parent', 'edgeParent'],
   ['dependency', 'dependencies'],
   ['dependant', 'dependants'],
   ['missing', 'edgeMissing'],
@@ -86,6 +105,7 @@ const ZOOM_STEP = 1.2
 export interface RuntimeGraphCanvasProps {
   readonly nodes: readonly RuntimeGraphNode[]
   readonly edges: readonly RuntimeGraphEdge[]
+  readonly fibers: readonly RuntimeGraphFiberNode[]
   readonly services: readonly RuntimeGraphServiceNode[]
   readonly serviceRelations: readonly RuntimeGraphServiceRelation[]
   readonly relations: RuntimeGraphRelations
@@ -110,23 +130,24 @@ function nodeStyle(datum: NodeData): Record<string, unknown> {
     : RELATION_COLORS[metadata.relation as keyof typeof RELATION_COLORS] ?? statusColor
   const missing = metadata.kind === 'missing-service'
   const service = metadata.kind === 'service'
+  const fiber = metadata.kind === 'fiber'
   return {
     size: metadata.size,
     fill: categoryColor.fill,
     stroke: relationColor,
     lineWidth: metadata.relation === 'selected' ? 3 : 1.5,
     lineDash: missing ? [5, 4] : undefined,
-    cursor: missing ? 'default' : service ? 'pointer' : 'grab',
+    cursor: missing ? 'default' : service || fiber ? 'pointer' : 'grab',
     shadowColor: metadata.relation === 'selected' ? 'rgba(99, 149, 255, 0.34)' : 'rgba(0, 0, 0, 0.28)',
     shadowBlur: metadata.relation === 'selected' ? 18 : 8,
     zIndex: 2,
     icon: false,
     label: true,
-    labelText: runtimeG6DisplayLabel(metadata.label, service ? 10 : 13),
+    labelText: runtimeG6DisplayLabel(metadata.label, service || fiber ? 10 : 13),
     labelPlacement: 'center',
     labelFill: '#ffffff',
     labelFontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    labelFontSize: missing ? 9 : service ? 9 : metadata.size >= 96 ? 11 : 10,
+    labelFontSize: missing ? 9 : service || fiber ? 9 : metadata.size >= 96 ? 11 : 10,
     labelFontWeight: 600,
     labelLineHeight: missing ? 10 : 12,
     labelMaxLines: 3,
@@ -154,6 +175,7 @@ function edgeStyle(datum: EdgeData): Record<string, unknown> {
     : RELATION_COLORS[metadata.relation as keyof typeof RELATION_COLORS] ?? '#555a64'
   const missing = metadata.kind === 'missing'
   const provides = metadata.kind === 'provides'
+  const ownership = metadata.kind === 'owns' || metadata.kind === 'parent'
   const lineDash = missing
     ? [6, 4]
     : metadata.relation === 'dependant'
@@ -162,13 +184,13 @@ function edgeStyle(datum: EdgeData): Record<string, unknown> {
         ? [2, 3]
         : undefined
   return {
-    stroke: missing ? STATUS_COLORS.missing : provides ? '#22c55e' : color,
+    stroke: missing ? EDGE_LEGEND_COLORS.missing : provides ? EDGE_LEGEND_COLORS.provides : ownership ? EDGE_LEGEND_COLORS.owns : color,
     zIndex: 0,
     lineWidth: metadata.relation === undefined ? 1 : 1.5,
     opacity: metadata.relation === undefined ? 0.38 : 0.74,
     lineDash,
     endArrow: true,
-    endArrowFill: missing ? STATUS_COLORS.missing : provides ? '#22c55e' : color,
+    endArrowFill: missing ? EDGE_LEGEND_COLORS.missing : provides ? EDGE_LEGEND_COLORS.provides : ownership ? EDGE_LEGEND_COLORS.owns : color,
     endArrowSize: 5,
     lineCap: 'round',
   }
@@ -200,7 +222,11 @@ function tooltipContent(items: Array<NodeData | EdgeData>, t: (key: RuntimeLocal
     title.className = 'dsh-insider-g6-tooltip__title'
     title.textContent = metadata.kind === 'missing'
       ? t('edgeMissing')
-      : metadata.kind === 'provides' ? t('edgeProvides') : t('edgeInjects')
+      : metadata.kind === 'provides'
+        ? t('edgeProvides')
+        : metadata.kind === 'owns'
+          ? t('edgeOwns')
+          : metadata.kind === 'parent' ? t('edgeParent') : t('edgeInjects')
     const services = document.createElement('span')
     services.className = 'dsh-insider-g6-tooltip__module'
     services.textContent = metadata.services.join(' · ')
@@ -233,9 +259,11 @@ function tooltipContent(items: Array<NodeData | EdgeData>, t: (key: RuntimeLocal
     ? metadata.service ?? metadata.label
     : metadata.kind === 'service'
       ? `${t('provider')}: ${metadata.providerEntryId ?? t('unavailable')}`
-    : metadata.moduleName ?? metadata.label
+      : metadata.kind === 'fiber'
+        ? `${t('ownerPlugin')}: ${metadata.ownerEntryId ?? t('unavailable')}`
+        : metadata.moduleName ?? metadata.label
   element.append(accent, eyebrow, title, moduleName)
-  if (metadata.kind === 'plugin') {
+  if (metadata.kind === 'plugin' || metadata.kind === 'fiber') {
     const stats = document.createElement('dl')
     stats.className = 'dsh-insider-g6-tooltip__stats'
     const values: Array<[RuntimeLocaleKey, number]> = [
@@ -351,13 +379,49 @@ function graphOptions(
   }
 }
 
+interface RuntimeG6Layer {
+  frameId: number | undefined
+  cancelAnimationFrame: (frameId: number) => void
+  render: () => void
+}
+
+function runtimeG6Layers(graph: Graph): RuntimeG6Layer[] {
+  return Object.values(graph.getCanvas().getLayers()) as unknown as RuntimeG6Layer[]
+}
+
+function renderRuntimeG6Frame(graph: Graph): void {
+  for (const layer of runtimeG6Layers(graph)) layer.render()
+}
+
+function suspendRuntimeG6AutoRendering(graph: Graph): void {
+  const canvas = graph.getCanvas()
+  const layers = Object.keys(canvas.getLayers()) as Array<Parameters<typeof canvas.getRenderer>[0]>
+  for (const layer of layers) {
+    canvas.getRenderer(layer).setConfig({
+      enableAutoRendering: false,
+      enableDirtyCheck: true,
+      enableRenderingOptimization: true,
+    })
+  }
+  // @antv/g starts a perpetual requestAnimationFrame loop before G6 exposes the
+  // canvas. Disabling the renderer option prevents future loops, while cancelling
+  // the already-scheduled frame makes a settled graph genuinely idle.
+  for (const layer of runtimeG6Layers(graph)) {
+    if (layer.frameId !== undefined) {
+      layer.cancelAnimationFrame(layer.frameId)
+      layer.frameId = undefined
+    }
+  }
+}
+
 export function RuntimeGraphCanvas({
-  nodes, edges, services, serviceRelations, relations, focus, savedPositions, graphLabel, phaseLabel, onSelect,
+  nodes, edges, fibers, services, serviceRelations, relations, focus, savedPositions, graphLabel, phaseLabel, onSelect,
   onPositionsChange, onResetPositions, categoryFilter, onCategoryFilterChange, t,
 }: RuntimeGraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const graphRef = useRef<Graph>()
   const topologyRef = useRef<string>()
+  const visualRef = useRef<string>()
   const focusKey = focus === undefined ? undefined : `${focus.kind}:${focus.id}`
   const selectedRef = useRef(focusKey)
   const callbacksRef = useRef({ onSelect, onPositionsChange })
@@ -372,9 +436,9 @@ export function RuntimeGraphCanvas({
 
   const data = useMemo(
     () => buildRuntimeG6Data(
-      nodes, edges, services, serviceRelations, relations, focus, savedPositions, categoryFilter === 'service',
+      nodes, edges, fibers, services, serviceRelations, relations, focus, savedPositions, categoryFilter === 'service',
     ),
-    [categoryFilter, edges, focus, nodes, relations, savedPositions, serviceRelations, services],
+    [categoryFilter, edges, fibers, focus, nodes, relations, savedPositions, serviceRelations, services],
   )
   dataRef.current = data
 
@@ -385,6 +449,10 @@ export function RuntimeGraphCanvas({
     const handleDragFinish = (ids: string[]): void => {
       const graph = graphRef.current
       if (graph === undefined) return
+      // G6's force-drag behavior reheats the d3 simulation. Explicitly stop it
+      // once the persisted position is captured so an interrupted pointer
+      // sequence cannot leave the renderer ticking indefinitely.
+      graph.stopLayout()
       const next = { ...savedPositionsRef.current }
       for (const id of ids) {
         const node = nodesRef.current.find(item => item.id === id)
@@ -407,6 +475,10 @@ export function RuntimeGraphCanvas({
           callbacksRef.current.onSelect({ kind: 'service', id: id.slice('service:'.length) })
           return
         }
+        if (id.startsWith('fiber:')) {
+          callbacksRef.current.onSelect({ kind: 'fiber', id: id.slice('fiber:'.length) })
+          return
+        }
         callbacksRef.current.onSelect({ kind: 'plugin', id })
       })
       const hideRuntimeTooltip = (): void => {
@@ -418,14 +490,20 @@ export function RuntimeGraphCanvas({
       graph.on('canvas:pointerleave', hideRuntimeTooltip)
       graph.on('aftertransform', () => {
         if (disposed || graphRef.current !== graph) return
+        renderRuntimeG6Frame(graph)
         // G6 can emit while its viewport controller is still being initialized.
         try { setZoom(graph.getZoom()) } catch { /* wait for the next transform */ }
       })
+      graph.on('node:drag', () => { renderRuntimeG6Frame(graph) })
+      graph.on('node:dragend', () => { renderRuntimeG6Frame(graph) })
       try {
-        await graph.render()
+        await renderRuntimeG6WithBudget(graph)
         if (disposed) return
         topologyRef.current = runtimeG6TopologyKey(dataRef.current)
+        visualRef.current = runtimeG6VisualKey(dataRef.current)
         await graph.fitView({ when: 'always', direction: 'both' }, false)
+        suspendRuntimeG6AutoRendering(graph)
+        renderRuntimeG6Frame(graph)
         if (!disposed && graphRef.current === graph) setZoom(graph.getZoom())
       } catch {
         if (!disposed) setRendererFailed(true)
@@ -436,6 +514,7 @@ export function RuntimeGraphCanvas({
       graphRef.current?.destroy()
       graphRef.current = undefined
       topologyRef.current = undefined
+      visualRef.current = undefined
     }
   }, [])
 
@@ -446,19 +525,20 @@ export function RuntimeGraphCanvas({
     const topology = runtimeG6TopologyKey(data)
     const selectionChanged = selectedRef.current !== focusKey
     selectedRef.current = focusKey
-    void syncRuntimeG6Data(graph, data, topologyRef.current).then(async () => {
+    void syncRuntimeG6Data(graph, data, topologyRef.current, visualRef.current).then(async (update) => {
       if (disposed) return
+      if (update === 'render') graph.stopLayout()
       topologyRef.current = topology
+      visualRef.current = runtimeG6VisualKey(data)
+      renderRuntimeG6Frame(graph)
       if (selectionChanged && focusKey !== undefined) {
         // The inspector is mounted in the same commit and narrows the graph
         // column. Synchronize G6's canvas dimensions before calculating the
         // first focused viewport so it does not center against the old width.
         graph.resize()
-        // Structural focus changes reuse many plugin ids from the full graph.
-        // G6 otherwise keeps their old global coordinates while new Service
-        // nodes start at the origin, so fitting can omit most of the focused
-        // topology. Re-run the configured collision layout before fitting.
-        await graph.layout()
+        // syncRuntimeG6Data already runs the configured layout exactly once for
+        // structural changes. Reusing this Graph instance avoids a second force
+        // simulation and preserves stable coordinates for lifecycle-only draws.
         await graph.fitView({ when: 'always', direction: 'both' }, { duration: 220, easing: 'ease-out' })
         // The inspector changes the canvas width in the same commit. Let its
         // ResizeObserver settle, then fit once more so the selected hub and
@@ -467,7 +547,10 @@ export function RuntimeGraphCanvas({
         if (disposed) return
         graph.resize()
         await graph.fitView({ when: 'always', direction: 'both' }, { duration: 180, easing: 'ease-out' })
-        if (!disposed) setZoom(graph.getZoom())
+        if (!disposed) {
+          renderRuntimeG6Frame(graph)
+          setZoom(graph.getZoom())
+        }
       }
     }).catch(() => { if (!disposed) setRendererFailed(true) })
     return () => { disposed = true }
@@ -477,6 +560,7 @@ export function RuntimeGraphCanvas({
     const graph = graphRef.current
     if (graph === undefined) return
     await graph.zoomTo(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next)), { duration: 160, easing: 'ease-out' })
+    renderRuntimeG6Frame(graph)
     setZoom(graph.getZoom())
   }
   const fitView = async (): Promise<void> => {
@@ -484,6 +568,7 @@ export function RuntimeGraphCanvas({
     if (graph === undefined) return
     graph.resize()
     await graph.fitView({ when: 'always', direction: 'both' }, { duration: 220, easing: 'ease-out' })
+    renderRuntimeG6Frame(graph)
     setZoom(graph.getZoom())
   }
   const reset = (): void => {
@@ -510,7 +595,11 @@ export function RuntimeGraphCanvas({
       </div>
       <div className={css.edgeTypeLegend} aria-label={t('edgeTypes')}>
         {EDGE_LEGEND_ITEMS.map(([kind, key]) => (
-          <span key={kind} data-edge-kind={kind}><i aria-hidden />{t(key)}</span>
+          <span
+            key={kind}
+            data-edge-kind={kind}
+            style={{ '--runtime-edge-color': EDGE_LEGEND_COLORS[kind as keyof typeof EDGE_LEGEND_COLORS] } as CSSProperties}
+          ><i aria-hidden />{t(key)}</span>
         ))}
       </div>
       <ul className={css.graphA11yList} aria-label={graphLabel}>
@@ -519,7 +608,9 @@ export function RuntimeGraphCanvas({
           if (metadata.kind === 'missing-service') return []
           const selection: RuntimeG6Focus = metadata.kind === 'service'
             ? { kind: 'service', id: String(node.id).slice('service:'.length) }
-            : { kind: 'plugin', id: String(node.id) }
+            : metadata.kind === 'fiber'
+              ? { kind: 'fiber', id: String(node.id).slice('fiber:'.length) }
+              : { kind: 'plugin', id: String(node.id) }
           return [<li key={String(node.id)}>
             <button type="button" onClick={() => { onSelect(selection) }}>
               {metadata.label}, {phaseLabel(metadata.phase as RuntimeFiberPhase)}

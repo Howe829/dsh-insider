@@ -1632,7 +1632,7 @@
 .edgeTypeLegend i {
   width: 16px;
   height: 0;
-  border-top: 2px solid var(--dsw-alias-border-l3);
+  border-top: 2px solid var(--runtime-edge-color, var(--dsw-alias-border-l3));
 }
 
 .edgeTypeLegend [data-edge-kind='dependency'] i {

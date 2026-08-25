@@ -2,7 +2,7 @@
 import { z } from 'zod'
 
 const _deepseek_ai_dsh_runtime_runtimeExplorer_snapshot_result$schema = z.object({
-  'schemaVersion': z.literal(5).readonly(),
+  'schemaVersion': z.literal(6).readonly(),
   'bootId': z.string().readonly(),
   'snapshotSeq': z.number().readonly(),
   'profile': z.union([z.literal(null), z.string()]).readonly(),
@@ -137,6 +137,22 @@ const _deepseek_ai_dsh_runtime_runtimeExplorer_snapshot_result$schema = z.object
   'target': z.string().readonly(),
   'services': z.array(z.string()).readonly(),
 })).readonly(),
+  'fibers': z.array(z.object({
+  'id': z.string().readonly(),
+  'uid': z.number().readonly(),
+  'name': z.string().readonly(),
+  'moduleName': z.string().readonly(),
+  'runtimeId': z.string().readonly().optional(),
+  'ownerNodeId': z.string().readonly().optional(),
+  'ownerEntryId': z.string().readonly().optional(),
+  'parentFiberId': z.string().readonly().optional(),
+  'entryRoot': z.boolean().readonly(),
+  'phase': z.union([z.literal(null), z.literal("failed"), z.literal("pending"), z.literal("active"), z.literal("loading"), z.literal("unloading")]).readonly(),
+  'provides': z.array(z.string()).readonly(),
+  'injects': z.array(z.string()).readonly(),
+  'missing': z.array(z.string()).readonly(),
+  'effectCount': z.number().readonly(),
+})).readonly(),
   'services': z.array(z.object({
   'id': z.string().readonly(),
   'name': z.string().readonly(),
@@ -198,7 +214,7 @@ export const TYPERT_REMOTE = {
         typeSymbol: '@deepseek-ai/dsh-runtime/types#RuntimeExplorerSnapshot',
         schema: _deepseek_ai_dsh_runtime_runtimeExplorer_snapshot_result$schema,
       },
-      sourceLocation: {"file":"packages/extensions/runtime/src/index.ts","line":701,"column":3},
+      sourceLocation: {"file":"packages/extensions/runtime/src/index.ts","line":765,"column":3},
     },
   ],
 }

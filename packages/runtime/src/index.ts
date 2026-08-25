@@ -16,6 +16,7 @@ import type {
   RuntimeEffectTransition,
   RuntimeFiberPhase,
   RuntimeGraphEdge,
+  RuntimeGraphFiberNode,
   RuntimeGraphNode,
   RuntimeGraphServiceNode,
   RuntimeGraphServiceRelation,
@@ -61,8 +62,8 @@ interface RuntimeProcessState {
 }
 
 const CAPABILITIES: RuntimeExplorerCapabilities = {
-  fiberInstances: false,
-  ownershipEdges: false,
+  fiberInstances: true,
+  ownershipEdges: true,
   scopes: false,
   lifecycleTransitions: true,
   turnPluginAttribution: false,
@@ -354,11 +355,16 @@ function isErrorEvent(event: SessionEvent): boolean {
 export function projectRuntimeGraph(ctx: Context, effectLimit: number): RuntimeGraphSnapshot {
   const processState = runtimeProcessState(ctx)
   const implementations = liveImplementations(ctx)
+  const liveFibers = [...ctx.registry.values()].flatMap(runtime => [...runtime.fibers])
   const implementationByIdentity = new Map(implementations.map(implementation => [
     ctx.reflect.store[implementation.key], implementation,
   ]))
   const providedByEntry = new Map<string, string[]>()
+  const providedByFiber = new Map<Fiber, string[]>()
   for (const impl of implementations) {
+    const fiberServices = providedByFiber.get(impl.fiber) ?? []
+    fiberServices.push(impl.name)
+    providedByFiber.set(impl.fiber, fiberServices)
     const entryId = owningEntryId(impl.fiber)
     if (entryId === undefined) continue
     const services = providedByEntry.get(entryId) ?? []
@@ -391,7 +397,8 @@ export function projectRuntimeGraph(ctx: Context, effectLimit: number): RuntimeG
       : [[identity, serviceRuntimeId(processState, implementation.key)] as const]),
   )
   const edgeServices = new Map<string, { source: string; target: string; services: string[] }>()
-  for (const entry of ctx.loader.entries()) {
+  const loaderEntries = [...ctx.loader.entries()]
+  for (const entry of loaderEntries) {
     if (entry.options.group) continue
     const fiber = entry.fiber
     const injects = fiber === undefined ? [] : Object.keys(fiber.inject)
@@ -451,9 +458,40 @@ export function projectRuntimeGraph(ctx: Context, effectLimit: number): RuntimeG
     target: edge.target,
     services: edge.services.sort(),
   }))
+  const fibers: RuntimeGraphFiberNode[] = liveFibers.flatMap((fiber) => {
+    if (fiber.uid === null) return []
+    const ownerEntryId = owningEntryId(fiber)
+    const ownerNodeId = ownerEntryId === undefined ? undefined : entryNodeId(ownerEntryId)
+    const parentFiber = fiber.parent.fiber
+    const parentFiberId = parentFiber.runtime === null || parentFiber.uid === null
+      ? undefined
+      : `${processState.bootId}:${parentFiber.uid}`
+    const injects = Object.keys(fiber.inject).sort()
+    const missing = injects.filter(service => fiber.ctx.reflect._getImpl(service, false) === undefined)
+    const runtimeId = pluginRuntimeId(processState, fiber.runtime)
+    const moduleName = fiber.entry?.options.name ?? fiber.runtime?.name ?? fiber.name
+    const id = `${processState.bootId}:${fiber.uid}`
+    return [{
+      id,
+      uid: fiber.uid,
+      name: fiber.name,
+      moduleName,
+      ...(runtimeId === undefined ? {} : { runtimeId }),
+      ...(ownerNodeId === undefined ? {} : { ownerNodeId }),
+      ...(ownerEntryId === undefined ? {} : { ownerEntryId }),
+      ...(parentFiberId === undefined ? {} : { parentFiberId }),
+      entryRoot: nodes.some(node => node.id === ownerNodeId && node.fiberId === id),
+      phase: FIBER_PHASE[fiber.state],
+      provides: [...(providedByFiber.get(fiber) ?? [])].sort(),
+      injects,
+      missing,
+      effectCount: effectCount(fiber.getEffects()),
+    }]
+  }).sort((left, right) => left.uid - right.uid)
   return {
     nodes,
     edges,
+    fibers,
     services: services.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
     serviceRelations: serviceRelations.sort((left, right) => left.id.localeCompare(right.id)),
   }

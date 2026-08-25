@@ -1,7 +1,7 @@
 /** Client-safe snapshot vocabulary for DSH Insider. @module @deepseek-ai/dsh-runtime/types */
 
 /** Current normalized snapshot contract emitted by DSH Insider. */
-export const RUNTIME_EXPLORER_SCHEMA_VERSION = 5
+export const RUNTIME_EXPLORER_SCHEMA_VERSION = 6
 
 /** Four product-facing lifecycle states shared by overview summaries and filters. */
 export type RuntimeOverviewStatus = 'pending' | 'active' | 'disposed' | 'failed'
@@ -97,6 +97,32 @@ export interface RuntimeGraphEdge {
   readonly services: readonly string[]
 }
 
+/** One live Cordis Fiber instance, materialized by the client only for focused diagnostics. */
+export interface RuntimeGraphFiberNode {
+  /** Process-lifetime identity derived from the Harness boot id and Cordis Fiber uid. */
+  readonly id: string
+  /** Fiber uid allocated by the current Cordis registry. */
+  readonly uid: number
+  /** Human-readable Cordis runtime name inherited by the Fiber. */
+  readonly name: string
+  /** Runtime/package name used to classify and search this Fiber. */
+  readonly moduleName: string
+  /** Identity shared by Fibers created from the same Cordis plugin runtime. */
+  readonly runtimeId?: string
+  /** Loader plugin that owns this Fiber subtree, when one exists. */
+  readonly ownerNodeId?: string
+  readonly ownerEntryId?: string
+  /** Parent Fiber identity, absent when the parent is the root Context. */
+  readonly parentFiberId?: string
+  /** True when this is the Loader entry's root Fiber represented by the owner plugin node. */
+  readonly entryRoot: boolean
+  readonly phase: RuntimeFiberPhase
+  readonly provides: readonly string[]
+  readonly injects: readonly string[]
+  readonly missing: readonly string[]
+  readonly effectCount: number
+}
+
 /** One concrete Cordis service implementation inside its resolved isolation scope. */
 export interface RuntimeGraphServiceNode {
   /** Process-lifetime identity of this scoped service implementation. */
@@ -125,6 +151,8 @@ export interface RuntimeGraphServiceRelation {
 export interface RuntimeGraphSnapshot {
   readonly nodes: readonly RuntimeGraphNode[]
   readonly edges: readonly RuntimeGraphEdge[]
+  /** Live Fiber instances, hidden by default and expanded for Fiber diagnostics. */
+  readonly fibers: readonly RuntimeGraphFiberNode[]
   /** Concrete scoped service implementations, materialized by the client only in focus mode. */
   readonly services: readonly RuntimeGraphServiceNode[]
   readonly serviceRelations: readonly RuntimeGraphServiceRelation[]

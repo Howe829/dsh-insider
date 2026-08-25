@@ -12,6 +12,7 @@ export function createRuntimeStore() {
             query: '',
             phase: 'all',
             category: 'all',
+            fiberCategory: 'all',
             selection: undefined,
             traceTurnKey: undefined,
             sidebarOffset: 0,
@@ -24,6 +25,7 @@ export function createRuntimeStore() {
                 draft.traceTurnKey = undefined;
                 draft.query = '';
                 draft.category = 'all';
+                draft.fiberCategory = 'all';
             },
             setQuery: (draft, query) => {
                 draft.query = query;
@@ -35,6 +37,12 @@ export function createRuntimeStore() {
             },
             setCategory: (draft, category) => {
                 draft.category = category;
+                if (category !== 'fiber')
+                    draft.fiberCategory = 'all';
+                draft.selection = undefined;
+            },
+            setFiberCategory: (draft, category) => {
+                draft.fiberCategory = category;
                 draft.selection = undefined;
             },
             select: (draft, selection) => { draft.selection = selection; },

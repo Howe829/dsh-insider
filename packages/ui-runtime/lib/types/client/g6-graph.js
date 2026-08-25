@@ -4,6 +4,7 @@ const MIN_PLUGIN_SIZE = 76;
 const MAX_PLUGIN_SIZE = 108;
 const MISSING_SERVICE_SIZE = 58;
 const SERVICE_SIZE = 72;
+const FIBER_SIZE = 64;
 export const RUNTIME_G6_COLLISION_GAP = 24;
 /**
  * Infer a stable, explainable visual category from DSH package conventions.
@@ -82,8 +83,9 @@ export function runtimeG6EdgeMetadata(edge) {
  * Project the Host graph into G6 data while keeping product state out of the renderer.
  * Missing Cordis providers become explicit satellite nodes only around the selected plugin.
  */
-export function buildRuntimeG6Data(nodes, edges, services, serviceRelations, relations, focus, savedPositions, showAllServices = false) {
+export function buildRuntimeG6Data(nodes, edges, fibers, services, serviceRelations, relations, focus, savedPositions, showAllServices = false) {
     const selectedPluginId = focus?.kind === 'plugin' ? focus.id : undefined;
+    const selectedFiberId = focus?.kind === 'fiber' ? focus.id : undefined;
     const selectedServiceId = focus?.kind === 'service' ? focus.id : undefined;
     const degree = new Map();
     const nodeIds = new Set(nodes.map(node => node.id));
@@ -119,7 +121,7 @@ export function buildRuntimeG6Data(nodes, edges, services, serviceRelations, rel
             states: node.id === selectedPluginId ? ['selected'] : [],
         };
     });
-    const focusedServiceRelations = focus === undefined
+    const focusedServiceRelations = focus === undefined || focus.kind === 'fiber'
         ? []
         : serviceRelations.filter(relation => ((focus.kind === 'service'
             ? relation.serviceNodeId === focus.id
@@ -144,6 +146,60 @@ export function buildRuntimeG6Data(nodes, edges, services, serviceRelations, rel
                 },
             }];
     });
+    const visibleFiberIds = new Set(fibers.map(fiber => fiber.id));
+    for (const fiber of fibers) {
+        const id = `fiber:${fiber.id}`;
+        const selected = fiber.id === selectedFiberId;
+        const size = FIBER_SIZE + (selected ? 8 : 0);
+        projectedNodes.push({
+            id,
+            size,
+            data: {
+                kind: 'fiber',
+                label: `#${fiber.uid} ${fiber.name}`,
+                moduleName: fiber.moduleName,
+                phase: runtimeLifecycleStatus(fiber.phase),
+                category: 'fiber',
+                ...(selected ? { relation: 'selected' } : {}),
+                size,
+                pinned: false,
+                provides: [...fiber.provides],
+                injects: [...fiber.injects],
+                missing: [...fiber.missing],
+                effectCount: fiber.effectCount,
+                ...(fiber.ownerNodeId === undefined ? {} : { ownerNodeId: fiber.ownerNodeId }),
+                ...(fiber.ownerEntryId === undefined ? {} : { ownerEntryId: fiber.ownerEntryId }),
+                ...(fiber.parentFiberId === undefined ? {} : { parentFiberId: fiber.parentFiberId }),
+                fiberUid: fiber.uid,
+                entryRoot: fiber.entryRoot,
+            },
+            states: selected ? ['selected'] : [],
+        });
+        if (fiber.ownerNodeId !== undefined && nodeIds.has(fiber.ownerNodeId)) {
+            projectedEdges.push({
+                id: `owns:${fiber.ownerNodeId}->${fiber.id}`,
+                source: fiber.ownerNodeId,
+                target: id,
+                data: {
+                    kind: 'owns',
+                    ...(selectedPluginId === fiber.ownerNodeId ? { relation: 'related' } : {}),
+                    services: [],
+                },
+            });
+        }
+        if (fiber.parentFiberId !== undefined && visibleFiberIds.has(fiber.parentFiberId)) {
+            projectedEdges.push({
+                id: `parent:${fiber.parentFiberId}->${fiber.id}`,
+                source: `fiber:${fiber.parentFiberId}`,
+                target: id,
+                data: {
+                    kind: 'parent',
+                    ...(selected ? { relation: 'dependency' } : {}),
+                    services: [],
+                },
+            });
+        }
+    }
     const serviceById = new Map(services.map(service => [service.id, service]));
     const visibleServiceIds = new Set(showAllServices
         ? services.map(service => service.id)
@@ -254,6 +310,27 @@ export function buildRuntimeG6Data(nodes, edges, services, serviceRelations, rel
             },
         });
     }
+    const selectedFiber = selectedFiberId === undefined ? undefined : fibers.find(fiber => fiber.id === selectedFiberId);
+    for (const [index, service] of (selectedFiber?.missing ?? []).entries()) {
+        const id = `missing:fiber:${selectedFiberId}:${service}`;
+        projectedNodes.push({
+            id,
+            size: MISSING_SERVICE_SIZE,
+            data: {
+                kind: 'missing-service', label: service, phase: 'missing', category: 'missing', relation: 'dependency',
+                size: MISSING_SERVICE_SIZE, pinned: false, provides: [], injects: [], missing: [service], effectCount: 0,
+                service, order: index,
+            },
+        });
+        projectedEdges.push({
+            id: `missing-edge:fiber:${selectedFiberId}:${service}`,
+            source: `fiber:${selectedFiberId}`,
+            target: id,
+            data: {
+                kind: 'missing', relation: 'dependency', services: [service],
+            },
+        });
+    }
     return { nodes: projectedNodes, edges: projectedEdges };
 }
 /** Count concrete scoped Service nodes currently materialized in focus mode. */
@@ -265,6 +342,36 @@ export function runtimeG6TopologyKey(data) {
     const nodes = data.nodes.map(node => String(node.id)).sort();
     const edges = data.edges.map(edge => `${String(edge.id)}:${edge.source}>${edge.target}`).sort();
     return `${nodes.join('|')}::${edges.join('|')}`;
+}
+/** Renderer-visible identity; tooltip-only metadata does not require a canvas redraw. */
+export function runtimeG6VisualKey(data) {
+    const nodes = data.nodes.map((node) => {
+        const metadata = runtimeG6NodeMetadata(node);
+        return [
+            String(node.id), metadata.label, metadata.phase, metadata.category,
+            metadata.relation ?? '', metadata.size, metadata.pinned, [...(node.states ?? [])].sort(),
+        ];
+    }).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+    const edges = data.edges.map((edge) => {
+        const metadata = runtimeG6EdgeMetadata(edge);
+        return [String(edge.id), metadata.kind, metadata.relation ?? ''];
+    }).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+    return JSON.stringify({ nodes, edges });
+}
+export const RUNTIME_G6_LAYOUT_BUDGET_MS = 800;
+/** Bound a force layout even when the renderer's completion promise never settles. */
+export async function renderRuntimeG6WithBudget(graph) {
+    let timer;
+    const budget = new Promise((resolve) => {
+        timer = setTimeout(() => {
+            graph.stopLayout?.();
+            resolve();
+        }, RUNTIME_G6_LAYOUT_BUDGET_MS);
+    });
+    await Promise.race([Promise.resolve(graph.render()).then(() => undefined), budget]);
+    if (timer !== undefined)
+        clearTimeout(timer);
+    graph.stopLayout?.();
 }
 function preserveRuntimeG6Positions(graph, data) {
     if (graph.getElementPosition === undefined)
@@ -284,14 +391,16 @@ function preserveRuntimeG6Positions(graph, data) {
 /**
  * Structural changes run layout; lifecycle-only refreshes draw in place so the viewport never jumps.
  */
-export async function syncRuntimeG6Data(graph, data, previousTopology) {
+export async function syncRuntimeG6Data(graph, data, previousTopology, previousVisual) {
     const topology = runtimeG6TopologyKey(data);
     if (topology !== previousTopology) {
         graph.setData(data);
-        await graph.render();
+        await renderRuntimeG6WithBudget(graph);
         return 'render';
     }
     graph.setData(preserveRuntimeG6Positions(graph, data));
+    if (runtimeG6VisualKey(data) === previousVisual)
+        return 'data';
     await graph.draw();
     return 'draw';
 }

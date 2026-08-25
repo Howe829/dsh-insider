@@ -95,6 +95,7 @@ describe('RuntimeExplorerGateway', () => {
     await ctx.loader.await()
     const providerFiber = [...ctx.loader.entries()].find(entry => entry.id === providerEntry)!.fiber!
     providerFiber.inject.alpha = null
+    const nestedPendingFiber = providerFiber.ctx.plugin(pending)
 
     const graph = projectRuntimeGraph(ctx, 1)
     expect(graph.nodes).toHaveLength(4)
@@ -107,7 +108,7 @@ describe('RuntimeExplorerGateway', () => {
       provides: ['alpha', 'beta'],
       injects: ['alpha'],
       effects: ['ctx.provide("alpha")'],
-      effectCount: 4,
+      effectCount: 5,
     })
     expect(graph.nodes.find(node => node.entryId === consumerEntry)).toMatchObject({
       phase: 'active', injects: ['alpha', 'beta'], missing: [],
@@ -139,11 +140,23 @@ describe('RuntimeExplorerGateway', () => {
       }),
     ]))
     expect(graph.edges.some(edge => edge.source === `entry:${providerEntry}` && edge.target === `entry:${providerEntry}`)).toBe(false)
+    expect(graph.fibers.find(fiber => fiber.uid === nestedPendingFiber.uid)).toMatchObject({
+      name: 'provider',
+      ownerNodeId: `entry:${providerEntry}`,
+      ownerEntryId: providerEntry,
+      parentFiberId: graph.nodes.find(node => node.entryId === providerEntry)?.fiberId,
+      entryRoot: false,
+      phase: 'pending',
+      injects: ['missingService'],
+      missing: ['missingService'],
+    })
+    expect(graph.fibers.find(fiber => fiber.id === graph.nodes.find(node => node.entryId === providerEntry)?.fiberId))
+      .toMatchObject({ ownerNodeId: `entry:${providerEntry}`, entryRoot: true, phase: 'active' })
 
     const firstSnapshot = runtime.snapshot()
     const secondSnapshot = runtime.snapshot()
     expect(firstSnapshot).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       bootId: expect.any(String),
       snapshotSeq: 1,
       profile: 'fixture-profile',
@@ -163,8 +176,8 @@ describe('RuntimeExplorerGateway', () => {
       graph,
       trace: [],
       capabilities: {
-        fiberInstances: false,
-        ownershipEdges: false,
+        fiberInstances: true,
+        ownershipEdges: true,
         scopes: false,
         lifecycleTransitions: true,
         turnPluginAttribution: false,
@@ -182,6 +195,8 @@ describe('RuntimeExplorerGateway', () => {
       statuses: { pending: 1, active: 2, disposed: 1, failed: 0 },
     })
     expect(firstSnapshot.overview.fiberBreakdown.total).toBe(firstSnapshot.overview.fibers)
+    expect(firstSnapshot.overview.fiberBreakdown.statuses.pending)
+      .toBeGreaterThan(firstSnapshot.overview.loaderBreakdown.statuses.pending)
     expect(firstSnapshot.overview.effects).toBe(
       firstSnapshot.effectActivity.plugins.reduce((sum, plugin) => sum + plugin.current, 0),
     )

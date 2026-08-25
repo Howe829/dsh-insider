@@ -16,6 +16,11 @@ const g6State = vi.hoisted(() => ({ instances: [] as Array<{
   zoom: number
   renderCalls: number
   drawCalls: number
+  layoutCalls: number
+  stopLayoutCalls: number
+  rendererConfigCalls: Array<Record<string, unknown>>
+  layerRenderCalls: number
+  layerCancelCalls: number
   tooltipHideCalls: number
   emit: (name: string, event?: Record<string, unknown>) => void
 }> }))
@@ -27,6 +32,11 @@ vi.mock('../src/client/g6-runtime.ts', () => {
     zoom = 1
     renderCalls = 0
     drawCalls = 0
+    layoutCalls = 0
+    stopLayoutCalls = 0
+    rendererConfigCalls: Array<Record<string, unknown>> = []
+    layerRenderCalls = 0
+    layerCancelCalls = 0
     tooltipHideCalls = 0
     private readonly events = new Map<string, Array<(...args: any[]) => void>>()
 
@@ -39,7 +49,19 @@ vi.mock('../src/client/g6-runtime.ts', () => {
     setData(data: Graph['data']) { this.data = data }
     async render() { this.renderCalls += 1 }
     async draw() { this.drawCalls += 1 }
-    async layout() {}
+    async layout() { this.layoutCalls += 1 }
+    stopLayout() { this.stopLayoutCalls += 1 }
+    private readonly layer = {
+      frameId: 17 as number | undefined,
+      render: () => { this.layerRenderCalls += 1 },
+      cancelAnimationFrame: () => { this.layerCancelCalls += 1 },
+    }
+    getCanvas() {
+      return {
+        getLayers: () => ({ main: this.layer }),
+        getRenderer: () => ({ setConfig: (config: Record<string, unknown>) => { this.rendererConfigCalls.push(config) } }),
+      }
+    }
     async fitView() {}
     async fitCenter() {}
     resize() {}
@@ -105,7 +127,7 @@ afterEach(() => {
 const t = ((key: RuntimeLocaleKey): string => en[key]) as RuntimeExplorerProps['t']
 
 const DATA: RuntimeExplorerSnapshot = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   bootId: 'fixture-boot',
   snapshotSeq: 1,
   profile: 'fixture-web',
@@ -200,6 +222,12 @@ const DATA: RuntimeExplorerSnapshot = {
       },
     ],
     edges: [{ id: 'injects:consumer->provider', type: 'injects', source: 'consumer', target: 'provider', services: ['llm'] }],
+    fibers: [{
+      id: 'fixture-boot:41', uid: 41, name: 'nested-tools', moduleName: '@fixture/dsh-tool-nested',
+      runtimeId: 'runtime:nested-tools', ownerNodeId: 'provider', ownerEntryId: 'provider-entry',
+      parentFiberId: 'fixture-boot:12', entryRoot: false, phase: 'pending',
+      provides: [], injects: ['tools'], missing: ['tools'], effectCount: 1,
+    }],
     services: [{
       id: 'service-llm', name: 'llm', providerNodeId: 'provider', providerEntryId: 'provider-entry', phase: 'active',
     }],
@@ -239,8 +267,8 @@ const DATA: RuntimeExplorerSnapshot = {
     },
   ],
   capabilities: {
-    fiberInstances: false,
-    ownershipEdges: false,
+    fiberInstances: true,
+    ownershipEdges: true,
     scopes: false,
     lifecycleTransitions: true,
     turnPluginAttribution: false,
@@ -408,6 +436,41 @@ describe('RuntimeExplorer', () => {
     expect(screen.queryByTestId('composed-chart')).toBeNull()
   })
 
+  it('drills a pending Fiber summary into the owning active plugin instead of an empty plugin filter', async () => {
+    const b = explorer()
+    fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
+    const fibers = within(screen.getByLabelText(en.fibers))
+    fireEvent.click(fibers.getByRole('button', { name: new RegExp(en.pending) }))
+
+    expect(b.store.getSnapshot()).toMatchObject({
+      tab: 'graph', phase: 'pending', category: 'fiber', fiberCategory: 'all',
+    })
+    expect(screen.queryByText(en.emptyGraph)).toBeNull()
+    expect(screen.getByRole('button', { name: /provider/ })).toBeTruthy()
+    await screen.findByRole('button', { name: /#41 nested-tools/ })
+    await waitFor(() => expect(g6State.instances.length).toBeGreaterThan(0))
+    const graph = g6State.instances.at(-1)!
+    act(() => { graph.emit('node:click', { target: { id: 'fiber:fixture-boot:41' } }) })
+
+    expect(b.store.getSnapshot().selection).toEqual({ kind: 'fiber', id: 'fixture-boot:41' })
+    expect(screen.getByText(en.selectedFiber)).toBeTruthy()
+    expect(screen.getByText('provider-entry')).toBeTruthy()
+    expect(screen.getByText(en.waitingForServices)).toBeTruthy()
+    expect(screen.getAllByText('tools').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText((_, element) => element?.textContent === `${en.relatedPlugins} 1 / 3`)).toBeTruthy()
+    expect(screen.getByText((_, element) => element?.textContent === `${en.relatedFibers} 1 / 1`)).toBeTruthy()
+    await waitFor(() => {
+      const focusedGraph = g6State.instances.at(-1)!
+      expect(focusedGraph.data.nodes.map(node => node.id)).toEqual(expect.arrayContaining([
+        'provider', 'fiber:fixture-boot:41', 'missing:fiber:fixture-boot:41:tools',
+      ]))
+      expect(focusedGraph.data.nodes.map(node => node.id)).not.toContain('consumer')
+    })
+    expect(g6State.instances).toHaveLength(1)
+    expect(g6State.instances[0]).toBe(graph)
+    expect(graph.layoutCalls).toBe(0)
+  })
+
   it('filters the real graph projection, selects a plugin, and renders service/effect diagnostics', async () => {
     const b = explorer()
     expect(screen.getByRole('heading', { name: en.title })).toBeTruthy()
@@ -421,7 +484,19 @@ describe('RuntimeExplorer', () => {
     ])
     await waitFor(() => expect(g6State.instances).toHaveLength(1))
     let graph = g6State.instances[0]!
+    expect(graph.stopLayoutCalls).toBeGreaterThan(0)
+    expect(graph.rendererConfigCalls).toContainEqual({
+      enableAutoRendering: false,
+      enableDirtyCheck: true,
+      enableRenderingOptimization: true,
+    })
+    expect(graph.layerCancelCalls).toBe(1)
+    expect(graph.layerRenderCalls).toBeGreaterThan(0)
     expect(graph.data.nodes.map(node => node.id)).not.toContain('missing:consumer:tools')
+    const ownsLegend = screen.getByLabelText(en.edgeTypes).querySelector<HTMLElement>('[data-edge-kind="owns"]')!
+    const ownsEdge = { id: 'owns:provider->fiber:test', source: 'provider', target: 'fiber:test', data: { kind: 'owns', services: [] } }
+    const ownsEdgeStyle = (graph.options.edge as { style: (edge: typeof ownsEdge) => Record<string, unknown> }).style(ownsEdge)
+    expect(ownsLegend.style.getPropertyValue('--runtime-edge-color')).toBe(ownsEdgeStyle.stroke)
     fireEvent.click(screen.getByRole('button', { name: /consumer/ }))
     expect(screen.getByText('consumer-entry')).toBeTruthy()
     expect(screen.getByLabelText(`${en.status}: ${en.pending}`)).toBeTruthy()
@@ -437,11 +512,12 @@ describe('RuntimeExplorer', () => {
     expect(screen.getByText((_, element) => (
       element?.tagName === 'SPAN' && element.textContent === `${en.relatedServices} 1 / 15`
     ))).toBeTruthy()
-    await waitFor(() => expect(g6State.instances).toHaveLength(2))
-    graph = g6State.instances.at(-1)!
+    await waitFor(() => expect(g6State.instances).toHaveLength(1))
+    expect(g6State.instances[0]).toBe(graph)
     await waitFor(() => expect(graph.data.nodes.map(node => node.id).sort()).toEqual([
       'consumer', 'missing:consumer:tools', 'provider', 'service:service-llm',
     ]))
+    expect(graph.layoutCalls).toBe(0)
     expect(graph.data.edges.some(edge => edge.data.services.includes('llm'))).toBe(true)
     expect(screen.getAllByText(en.dependencies)).toHaveLength(1)
     expect(screen.getAllByText(en.dependants)).toHaveLength(1)
@@ -485,7 +561,7 @@ describe('RuntimeExplorer', () => {
     expect(b.store.getSnapshot().category).toBe('tool')
     toolFilter = within(screen.getByLabelText(en.pluginTypes)).getByRole('button', { name: en.categoryTool })
     expect(toolFilter.getAttribute('aria-pressed')).toBe('true')
-    expect(toolFilter.getAttribute('style')).toContain('--runtime-node-color: #6ee7b7')
+    expect(toolFilter.getAttribute('style')).toContain('--runtime-node-color: #4ade80')
     expect(screen.getByRole('button', { name: /tool-bash/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /provider/ })).toBeNull()
     expect(screen.getByText(en.filteredType).parentElement?.textContent).toBe(`${en.filteredType}${en.categoryTool}`)
@@ -568,11 +644,12 @@ describe('RuntimeExplorer', () => {
     expect(screen.getByText('consumer-two · @fixture/consumer-two')).toBeTruthy()
     expect(screen.queryByLabelText(en.relationDepth)).toBeNull()
 
-    await waitFor(() => expect(g6State.instances.length).toBeGreaterThanOrEqual(3))
-    const graph = g6State.instances.at(-1)!
+    await waitFor(() => expect(g6State.instances).toHaveLength(1))
+    const graph = g6State.instances[0]!
     await waitFor(() => expect(graph.data.nodes.map(node => node.id).sort()).toEqual([
       'consumer', 'consumer-two', 'provider', 'service:service-llm',
     ]))
+    expect(graph.layoutCalls).toBe(0)
     expect(graph.data.edges.map(edge => edge.id).sort()).toEqual([
       'injects:consumer->service-llm',
       'injects:consumer-two->service-llm',
@@ -753,13 +830,26 @@ describe('RuntimeExplorer', () => {
       (item: Record<string, any>) => item.type === 'drag-element-force',
     )
     act(() => drag.onFinish(['provider']))
+    expect(graph.stopLayoutCalls).toBeGreaterThan(1)
     const saved = JSON.parse(window.localStorage.getItem('dsh-runtime:graph-layout:v1:fixture-web') as string)
     expect(saved.positions.provider).toEqual({ x: 220, y: 240, pinned: true })
 
     const initialRenderCalls = graph.renderCalls
+    const initialDrawCalls = graph.drawCalls
+    const initialLayerRenderCalls = graph.layerRenderCalls
+    b.view.rerender(<RuntimeExplorer
+      {...b.props}
+      useRuntime={sourceHook({
+        data: { ...DATA, snapshotSeq: DATA.snapshotSeq + 1, observedAt: DATA.observedAt + 1_500 },
+        loading: false,
+        error: undefined,
+      })}
+    />)
+    expect(graph.drawCalls).toBe(initialDrawCalls)
+
     const refreshed: RuntimeExplorerSnapshot = {
       ...DATA,
-      snapshotSeq: DATA.snapshotSeq + 1,
+      snapshotSeq: DATA.snapshotSeq + 2,
       graph: {
         ...DATA.graph,
         nodes: DATA.graph.nodes.map(item => (
@@ -773,6 +863,7 @@ describe('RuntimeExplorer', () => {
       useRuntime={sourceHook({ data: refreshed, loading: false, error: undefined })}
     />)
     await waitFor(() => expect(graph.drawCalls).toBeGreaterThan(0))
+    expect(graph.layerRenderCalls).toBeGreaterThan(initialLayerRenderCalls)
     expect(g6State.instances).toHaveLength(1)
     expect(graph.renderCalls).toBe(initialRenderCalls)
     expect(graph.data.nodes.find(node => node.id === 'provider')?.data.phase).toBe('failed')

@@ -7,6 +7,6 @@ export declare function RuntimeOverview({ overview, activity, t, onInspect, }: {
     overview: RuntimeOverviewSnapshot;
     activity: RuntimeEffectActivitySnapshot;
     t: (key: RuntimeLocaleKey) => string;
-    onInspect?: (category: RuntimePluginCategory | undefined, status: RuntimeOverviewStatus) => void;
+    onInspect?: (kind: 'plugin' | 'fiber' | 'service', category: RuntimePluginCategory | undefined, status: RuntimeOverviewStatus) => void;
 }): import("react").JSX.Element;
 //# sourceMappingURL=RuntimeOverview.d.ts.map

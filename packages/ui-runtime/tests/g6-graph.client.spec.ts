@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
-  RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation,
+  RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation, RuntimeGraphSnapshot,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  buildRuntimeG6Data, runtimeG6CollisionRadius, runtimeG6DisplayLabel, runtimeG6EdgeMetadata,
+  buildRuntimeG6Data, RUNTIME_G6_LAYOUT_BUDGET_MS, runtimeG6CollisionRadius, runtimeG6DisplayLabel, runtimeG6EdgeMetadata,
   runtimeG6NodeCategory, runtimeG6NodeMetadata,
-  runtimeG6NodeSize, runtimeG6TopologyKey, syncRuntimeG6Data,
+  runtimeG6NodeSize, runtimeG6TopologyKey, runtimeG6VisualKey, syncRuntimeG6Data,
 } from '../src/client/g6-graph.ts'
 import type { RuntimeGraphRelations } from '../src/client/graph.ts'
+
+type RuntimeGraphFiberNode = RuntimeGraphSnapshot['fibers'][number]
 
 const node = (
   id: string,
@@ -45,6 +47,17 @@ const serviceRelation: RuntimeGraphServiceRelation = {
   consumerNodeId: 'consumer', providerNodeId: 'provider',
 }
 
+const fiber = (
+  id: string,
+  uid: number,
+  phase: RuntimeGraphFiberNode['phase'],
+  options: Partial<RuntimeGraphFiberNode> = {},
+): RuntimeGraphFiberNode => ({
+  id, uid, name: `fiber-${uid}`, moduleName: '@fixture/provider', ownerNodeId: 'provider',
+  ownerEntryId: 'provider-entry', entryRoot: false, phase, provides: [], injects: [], missing: [], effectCount: 0,
+  ...options,
+})
+
 const relations: RuntimeGraphRelations = {
   nodes: new Map([
     ['consumer', 'selected'],
@@ -58,6 +71,7 @@ describe('G6 runtime graph projection', () => {
     const data = buildRuntimeG6Data(
       [node('provider'), node('consumer', 'pending', ['tools'])],
       [edge('consumer', 'provider', 'llm')],
+      [],
       [service],
       [serviceRelation],
       relations,
@@ -101,17 +115,44 @@ describe('G6 runtime graph projection', () => {
   it('keeps Service nodes out of the default graph and materializes exact bindings only on focus', () => {
     const defaultData = buildRuntimeG6Data(
       [node('provider'), node('consumer')], [edge('consumer', 'provider', 'llm')],
-      [service], [serviceRelation], { nodes: new Map(), edges: new Map() }, undefined, {},
+      [], [service], [serviceRelation], { nodes: new Map(), edges: new Map() }, undefined, {},
     )
     expect(defaultData.nodes.map(item => runtimeG6NodeMetadata(item).kind)).toEqual(['plugin', 'plugin'])
     expect(defaultData.edges).toHaveLength(1)
 
     const focused = buildRuntimeG6Data(
       [node('provider'), node('consumer')], [edge('consumer', 'provider', 'llm')],
-      [service], [serviceRelation], relations, { kind: 'plugin', id: 'consumer' }, {},
+      [], [service], [serviceRelation], relations, { kind: 'plugin', id: 'consumer' }, {},
     )
     expect(focused.nodes.map(item => runtimeG6NodeMetadata(item).kind)).toEqual(['plugin', 'plugin', 'service'])
     expect(focused.edges.map(item => runtimeG6EdgeMetadata(item).kind)).toEqual(['provides', 'injects'])
+  })
+
+  it('materializes owned Fiber instances on demand with parent and missing-service diagnostics', () => {
+    const rootFiber = fiber('boot:10', 10, 'active', { entryRoot: true })
+    const pendingFiber = fiber('boot:11', 11, 'pending', {
+      parentFiberId: rootFiber.id,
+      injects: ['tools'],
+      missing: ['tools'],
+    })
+    const data = buildRuntimeG6Data(
+      [node('provider')], [], [rootFiber, pendingFiber], [], [],
+      { nodes: new Map(), edges: new Map() }, { kind: 'fiber', id: pendingFiber.id }, {},
+    )
+
+    expect(data.nodes.map(item => item.id)).toEqual([
+      'provider', 'fiber:boot:10', 'fiber:boot:11', 'missing:fiber:boot:11:tools',
+    ])
+    expect(data.edges.map(item => item.id)).toEqual([
+      'owns:provider->boot:10', 'owns:provider->boot:11', 'parent:boot:10->boot:11',
+      'missing-edge:fiber:boot:11:tools',
+    ])
+    expect(runtimeG6NodeMetadata(data.nodes[2]!)).toMatchObject({
+      kind: 'fiber', category: 'fiber', phase: 'pending', fiberUid: 11, ownerNodeId: 'provider',
+      parentFiberId: 'boot:10', missing: ['tools'], relation: 'selected',
+    })
+    expect(runtimeG6EdgeMetadata(data.edges[0]!)).toMatchObject({ kind: 'owns' })
+    expect(runtimeG6EdgeMetadata(data.edges[2]!)).toMatchObject({ kind: 'parent' })
   })
 
   it('materializes a root Context service for its consumer without inventing a plugin provider', () => {
@@ -123,7 +164,7 @@ describe('G6 runtime graph projection', () => {
       consumerNodeId: 'consumer',
     }
     const focused = buildRuntimeG6Data(
-      [node('consumer')], [], [rootService], [rootRelation],
+      [node('consumer')], [], [], [rootService], [rootRelation],
       { nodes: new Map([['consumer', 'selected']]), edges: new Map() },
       { kind: 'plugin', id: 'consumer' }, {},
     )
@@ -141,7 +182,7 @@ describe('G6 runtime graph projection', () => {
 
   it('materializes every Service without dangling plugin edges in Service filter mode', () => {
     const serviceData = buildRuntimeG6Data(
-      [], [], [service], [serviceRelation], { nodes: new Map(), edges: new Map() }, undefined, {}, true,
+      [], [], [], [service], [serviceRelation], { nodes: new Map(), edges: new Map() }, undefined, {}, true,
     )
 
     expect(serviceData.nodes.map(item => item.id)).toEqual(['service:service-llm'])
@@ -160,6 +201,7 @@ describe('G6 runtime graph projection', () => {
     const focused = buildRuntimeG6Data(
       [node('provider'), node('consumer'), node('consumer-two')],
       [edge('consumer', 'provider', 'llm'), edge('consumer-two', 'provider', 'llm')],
+      [],
       [service], [serviceRelation, consumerTwoRelation],
       {
         nodes: new Map([
@@ -216,8 +258,8 @@ describe('G6 runtime graph projection', () => {
   })
 
   it('keeps topology identity stable across lifecycle refreshes', () => {
-    const before = buildRuntimeG6Data([node('plugin', 'active')], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
-    const after = buildRuntimeG6Data([node('plugin', 'failed')], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
+    const before = buildRuntimeG6Data([node('plugin', 'active')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
+    const after = buildRuntimeG6Data([node('plugin', 'failed')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
     expect(runtimeG6TopologyKey(after)).toBe(runtimeG6TopologyKey(before))
   })
 })
@@ -230,11 +272,13 @@ describe('G6 refresh policy', () => {
       draw: vi.fn().mockResolvedValue(undefined),
       getElementPosition: vi.fn().mockReturnValue([420, 260, 0]),
     }
-    const first = buildRuntimeG6Data([node('plugin', 'active')], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
-    expect(await syncRuntimeG6Data(graph, first, undefined)).toBe('render')
+    const first = buildRuntimeG6Data([node('plugin', 'active')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
+    expect(await syncRuntimeG6Data(graph, first, undefined, undefined)).toBe('render')
 
-    const refreshed = buildRuntimeG6Data([node('plugin', 'failed')], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
-    expect(await syncRuntimeG6Data(graph, refreshed, runtimeG6TopologyKey(first))).toBe('draw')
+    const refreshed = buildRuntimeG6Data([node('plugin', 'failed')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
+    expect(await syncRuntimeG6Data(
+      graph, refreshed, runtimeG6TopologyKey(first), runtimeG6VisualKey(first),
+    )).toBe('draw')
     expect(graph.render).toHaveBeenCalledOnce()
     expect(graph.draw).toHaveBeenCalledOnce()
     expect(graph.setData).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -242,9 +286,50 @@ describe('G6 refresh policy', () => {
     }))
 
     const expanded = buildRuntimeG6Data(
-      [node('plugin', 'failed'), node('new-plugin')], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {},
+      [node('plugin', 'failed'), node('new-plugin')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {},
     )
-    expect(await syncRuntimeG6Data(graph, expanded, runtimeG6TopologyKey(refreshed))).toBe('render')
+    expect(await syncRuntimeG6Data(
+      graph, expanded, runtimeG6TopologyKey(refreshed), runtimeG6VisualKey(refreshed),
+    )).toBe('render')
     expect(graph.render).toHaveBeenCalledTimes(2)
+  })
+
+  it('updates tooltip metadata without redrawing an unchanged visual graph', async () => {
+    const graph = {
+      setData: vi.fn(),
+      render: vi.fn().mockResolvedValue(undefined),
+      draw: vi.fn().mockResolvedValue(undefined),
+      getElementPosition: vi.fn().mockReturnValue([420, 260, 0]),
+    }
+    const first = buildRuntimeG6Data([node('plugin')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {})
+    const changedNode = { ...node('plugin'), effectCount: 1, effects: ['effect'] }
+    const refreshed = buildRuntimeG6Data(
+      [changedNode], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {},
+    )
+
+    expect(await syncRuntimeG6Data(
+      graph, refreshed, runtimeG6TopologyKey(first), runtimeG6VisualKey(first),
+    )).toBe('data')
+    expect(graph.setData).toHaveBeenCalledOnce()
+    expect(graph.draw).not.toHaveBeenCalled()
+  })
+
+  it('stops and releases a structural layout whose renderer promise never settles', async () => {
+    vi.useFakeTimers()
+    const graph = {
+      setData: vi.fn(),
+      render: vi.fn(() => new Promise<void>(() => undefined)),
+      draw: vi.fn().mockResolvedValue(undefined),
+      stopLayout: vi.fn(),
+    }
+    const data = buildRuntimeG6Data(
+      [node('plugin')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {},
+    )
+    const pending = syncRuntimeG6Data(graph, data, undefined, undefined)
+    await vi.advanceTimersByTimeAsync(RUNTIME_G6_LAYOUT_BUDGET_MS)
+
+    await expect(pending).resolves.toBe('render')
+    expect(graph.stopLayout).toHaveBeenCalled()
+    vi.useRealTimers()
   })
 })
