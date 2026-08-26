@@ -6,6 +6,34 @@ const MISSING_SERVICE_SIZE = 58;
 const SERVICE_SIZE = 72;
 const FIBER_SIZE = 64;
 export const RUNTIME_G6_COLLISION_GAP = 24;
+export const RUNTIME_G6_INITIAL_SPACING = MAX_PLUGIN_SIZE + RUNTIME_G6_COLLISION_GAP * 2;
+/**
+ * Give the force simulation a deterministic, non-overlapping starting point.
+ * G6 otherwise initializes many newly materialized Fiber nodes at the same
+ * coordinate, and the bounded layout budget can expire before they separate.
+ */
+export function seedRuntimeG6Positions(nodes) {
+    const pending = nodes
+        .filter(node => !Number.isFinite(node.style?.x) || !Number.isFinite(node.style?.y))
+        .map(node => String(node.id))
+        .sort();
+    if (pending.length === 0)
+        return [...nodes];
+    const columns = Math.ceil(Math.sqrt(pending.length));
+    const rows = Math.ceil(pending.length / columns);
+    const positionById = new Map(pending.map((id, index) => {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        return [id, {
+                x: (column - (columns - 1) / 2) * RUNTIME_G6_INITIAL_SPACING,
+                y: (row - (rows - 1) / 2) * RUNTIME_G6_INITIAL_SPACING,
+            }];
+    }));
+    return nodes.map((node) => {
+        const position = positionById.get(String(node.id));
+        return position === undefined ? node : { ...node, style: { ...node.style, ...position } };
+    });
+}
 /**
  * Infer a stable, explainable visual category from DSH package conventions.
  * The fallback deliberately stays neutral for third-party plugins.
@@ -331,7 +359,7 @@ export function buildRuntimeG6Data(nodes, edges, fibers, services, serviceRelati
             },
         });
     }
-    return { nodes: projectedNodes, edges: projectedEdges };
+    return { nodes: seedRuntimeG6Positions(projectedNodes), edges: projectedEdges };
 }
 /** Count concrete scoped Service nodes currently materialized in focus mode. */
 export function runtimeG6VisibleServiceCount(data) {
@@ -359,19 +387,28 @@ export function runtimeG6VisualKey(data) {
     return JSON.stringify({ nodes, edges });
 }
 export const RUNTIME_G6_LAYOUT_BUDGET_MS = 800;
+/** G6 releases a completed layout before its public stop hook becomes a no-op. */
+export function stopRuntimeG6Layout(graph) {
+    try {
+        graph.stopLayout?.();
+    }
+    catch {
+        // The layout has already completed and released its internal instance.
+    }
+}
 /** Bound a force layout even when the renderer's completion promise never settles. */
 export async function renderRuntimeG6WithBudget(graph) {
     let timer;
     const budget = new Promise((resolve) => {
         timer = setTimeout(() => {
-            graph.stopLayout?.();
+            stopRuntimeG6Layout(graph);
             resolve();
         }, RUNTIME_G6_LAYOUT_BUDGET_MS);
     });
     await Promise.race([Promise.resolve(graph.render()).then(() => undefined), budget]);
     if (timer !== undefined)
         clearTimeout(timer);
-    graph.stopLayout?.();
+    stopRuntimeG6Layout(graph);
 }
 function preserveRuntimeG6Positions(graph, data) {
     if (graph.getElementPosition === undefined)

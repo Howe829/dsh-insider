@@ -53,6 +53,13 @@ export type RuntimeG6Focus = {
     readonly id: string;
 };
 export declare const RUNTIME_G6_COLLISION_GAP = 24;
+export declare const RUNTIME_G6_INITIAL_SPACING: number;
+/**
+ * Give the force simulation a deterministic, non-overlapping starting point.
+ * G6 otherwise initializes many newly materialized Fiber nodes at the same
+ * coordinate, and the bounded layout budget can expire before they separate.
+ */
+export declare function seedRuntimeG6Positions(nodes: readonly NodeData[]): NodeData[];
 /**
  * Infer a stable, explainable visual category from DSH package conventions.
  * The fallback deliberately stays neutral for third-party plugins.
@@ -87,6 +94,8 @@ export interface RuntimeG6GraphPort {
     getElementPosition?: (id: string) => ArrayLike<number>;
 }
 export declare const RUNTIME_G6_LAYOUT_BUDGET_MS = 800;
+/** G6 releases a completed layout before its public stop hook becomes a no-op. */
+export declare function stopRuntimeG6Layout(graph: RuntimeG6GraphPort): void;
 /** Bound a force layout even when the renderer's completion promise never settles. */
 export declare function renderRuntimeG6WithBudget(graph: RuntimeG6GraphPort): Promise<void>;
 /**

@@ -3,9 +3,9 @@ import type {
   RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation, RuntimeGraphSnapshot,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  buildRuntimeG6Data, RUNTIME_G6_LAYOUT_BUDGET_MS, runtimeG6CollisionRadius, runtimeG6DisplayLabel, runtimeG6EdgeMetadata,
-  runtimeG6NodeCategory, runtimeG6NodeMetadata,
-  runtimeG6NodeSize, runtimeG6TopologyKey, runtimeG6VisualKey, syncRuntimeG6Data,
+  buildRuntimeG6Data, RUNTIME_G6_INITIAL_SPACING, RUNTIME_G6_LAYOUT_BUDGET_MS, runtimeG6CollisionRadius,
+  runtimeG6DisplayLabel, runtimeG6EdgeMetadata, runtimeG6NodeCategory, runtimeG6NodeMetadata,
+  runtimeG6NodeSize, runtimeG6TopologyKey, runtimeG6VisualKey, stopRuntimeG6Layout, syncRuntimeG6Data,
 } from '../src/client/g6-graph.ts'
 import type { RuntimeGraphRelations } from '../src/client/graph.ts'
 
@@ -239,6 +239,23 @@ describe('G6 runtime graph projection', () => {
     expect(runtimeG6CollisionRadius(108)).toBeGreaterThan(108 / 2)
   })
 
+  it('seeds every unpinned node at a stable non-overlapping coordinate', () => {
+    const data = buildRuntimeG6Data(
+      Array.from({ length: 9 }, (_, index) => node(`plugin-${index}`)),
+      [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {},
+    )
+    const coordinates = data.nodes.map(item => [Number(item.style?.x), Number(item.style?.y)] as const)
+    expect(coordinates.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y))).toBe(true)
+    expect(new Set(coordinates.map(([x, y]) => `${x}:${y}`)).size).toBe(data.nodes.length)
+    for (let left = 0; left < coordinates.length; left += 1) {
+      for (let right = left + 1; right < coordinates.length; right += 1) {
+        const [leftX, leftY] = coordinates[left]!
+        const [rightX, rightY] = coordinates[right]!
+        expect(Math.hypot(rightX - leftX, rightY - leftY)).toBeGreaterThanOrEqual(RUNTIME_G6_INITIAL_SPACING)
+      }
+    }
+  })
+
   it('classifies DSH plugin roles deterministically while keeping third-party extensions neutral', () => {
     expect(runtimeG6NodeCategory('@deepseek-ai/cordis-plugin-loader', 'loader')).toBe('core')
     expect(runtimeG6NodeCategory('@deepseek-ai/dsh-agent-preset', 'agent-preset')).toBe('agent')
@@ -331,5 +348,25 @@ describe('G6 refresh policy', () => {
     await expect(pending).resolves.toBe('render')
     expect(graph.stopLayout).toHaveBeenCalled()
     vi.useRealTimers()
+  })
+
+  it('treats an already released G6 layout as safely stopped', async () => {
+    const graph = {
+      setData: vi.fn(),
+      render: vi.fn().mockResolvedValue(undefined),
+      draw: vi.fn().mockResolvedValue(undefined),
+      stopLayout: vi.fn(() => { throw new TypeError('layout already released') }),
+    }
+
+    expect(() => stopRuntimeG6Layout(graph)).not.toThrow()
+    await expect(syncRuntimeG6Data(
+      graph,
+      buildRuntimeG6Data(
+        [node('plugin')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {},
+      ),
+      undefined,
+      undefined,
+    )).resolves.toBe('render')
+    expect(graph.stopLayout).toHaveBeenCalledTimes(2)
   })
 })

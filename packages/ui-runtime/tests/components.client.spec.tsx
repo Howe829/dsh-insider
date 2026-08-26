@@ -776,18 +776,21 @@ describe('RuntimeExplorer', () => {
     await waitFor(() => expect(screen.getByLabelText(en.zoomLevel).textContent).toBe('100%'))
   })
 
-  it('configures G6 canvas panning, wheel zoom, collision, and fixed node dragging', async () => {
+  it('configures G6 canvas panning, wheel zoom, collision, and post-layout node dragging', async () => {
     const b = explorer()
     await waitFor(() => expect(g6State.instances).toHaveLength(1))
     const graph = g6State.instances[0]!
     const options = graph.options as Record<string, any>
     const behaviours = options.behaviors as Array<Record<string, any>>
     expect(behaviours.map(item => item.type)).toEqual(expect.arrayContaining([
-      'drag-canvas', 'zoom-canvas', 'drag-element-force',
+      'drag-canvas', 'zoom-canvas', 'drag-element',
     ]))
+    expect(behaviours.map(item => item.type)).not.toContain('drag-element-force')
     expect(behaviours.map(item => item.type)).not.toContain('hover-activate')
-    expect(behaviours.find(item => item.type === 'drag-element-force')).toMatchObject({ fixed: true })
-    expect(options.layout).toMatchObject({ type: 'd3-force', collide: { strength: 1, iterations: 5 } })
+    expect(behaviours.find(item => item.type === 'drag-element')).toMatchObject({ animation: false })
+    expect(options.layout).toMatchObject({
+      type: 'd3-force', preventOverlap: true, nodeSpacing: 48, collideStrength: 1, collideIterations: 5,
+    })
     expect(options.layout).toMatchObject({ alphaMin: 0.08, alphaDecay: 0.12, alphaTarget: 0 })
     expect(options.edge).toMatchObject({ type: 'line' })
     const nodeStyle = (options.node as Record<string, any>).style(graph.data.nodes[0])
@@ -822,15 +825,18 @@ describe('RuntimeExplorer', () => {
     expect(b.store.getSnapshot().selection).toEqual({ kind: 'node', id: 'provider' })
   })
 
-  it('pins a force-dragged node and keeps the graph instance stable across status refresh', async () => {
+  it('persists a directly dragged node and keeps the graph instance stable across status refresh', async () => {
     const b = explorer()
     await waitFor(() => expect(g6State.instances).toHaveLength(1))
     const graph = g6State.instances[0]!
     const drag = (graph.options as Record<string, any>).behaviors.find(
-      (item: Record<string, any>) => item.type === 'drag-element-force',
+      (item: Record<string, any>) => item.type === 'drag-element',
     )
+    const stopLayoutCallsBeforeDrag = graph.stopLayoutCalls
+    const dragged = graph.data.nodes.find(item => item.id === 'provider')!
+    dragged.style = { ...dragged.style, x: 220, y: 240 }
     act(() => drag.onFinish(['provider']))
-    expect(graph.stopLayoutCalls).toBeGreaterThan(1)
+    expect(graph.stopLayoutCalls).toBe(stopLayoutCallsBeforeDrag)
     const saved = JSON.parse(window.localStorage.getItem('dsh-runtime:graph-layout:v1:fixture-web') as string)
     expect(saved.positions.provider).toEqual({ x: 220, y: 240, pinned: true })
 

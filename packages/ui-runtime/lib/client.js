@@ -5288,6 +5288,35 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 		const SERVICE_SIZE = 72;
 		const FIBER_SIZE = 64;
 		/**
+		* Give the force simulation a deterministic, non-overlapping starting point.
+		* G6 otherwise initializes many newly materialized Fiber nodes at the same
+		* coordinate, and the bounded layout budget can expire before they separate.
+		*/
+		function seedRuntimeG6Positions(nodes) {
+			const pending = nodes.filter((node) => !Number.isFinite(node.style?.x) || !Number.isFinite(node.style?.y)).map((node) => String(node.id)).sort();
+			if (pending.length === 0) return [...nodes];
+			const columns = Math.ceil(Math.sqrt(pending.length));
+			const rows = Math.ceil(pending.length / columns);
+			const positionById = new Map(pending.map((id, index) => {
+				const column = index % columns;
+				const row = Math.floor(index / columns);
+				return [id, {
+					x: (column - (columns - 1) / 2) * 156,
+					y: (row - (rows - 1) / 2) * 156
+				}];
+			}));
+			return nodes.map((node) => {
+				const position = positionById.get(String(node.id));
+				return position === void 0 ? node : {
+					...node,
+					style: {
+						...node.style,
+						...position
+					}
+				};
+			});
+		}
+		/**
 		* Infer a stable, explainable visual category from DSH package conventions.
 		* The fallback deliberately stays neutral for third-party plugins.
 		*/
@@ -5332,10 +5361,6 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 		function runtimeG6NodeSize(degree, selected = false, label = "") {
 			const size = MIN_PLUGIN_SIZE + Math.min(18, Math.max(0, label.length - 8)) + Math.round(Math.sqrt(Math.max(0, degree)) * 5) + (selected ? 6 : 0);
 			return Math.min(MAX_PLUGIN_SIZE, size);
-		}
-		/** Collision radius passed to G6, including label-safe whitespace around each circle. */
-		function runtimeG6CollisionRadius(size) {
-			return Math.max(0, size) / 2 + 24;
 		}
 		/** Safely read the metadata placed on a G6 node datum by this adapter. */
 		function runtimeG6NodeMetadata(node) {
@@ -5581,7 +5606,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				});
 			}
 			return {
-				nodes: projectedNodes,
+				nodes: seedRuntimeG6Positions(projectedNodes),
 				edges: projectedEdges
 			};
 		}
@@ -5619,18 +5644,24 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				edges
 			});
 		}
+		/** G6 releases a completed layout before its public stop hook becomes a no-op. */
+		function stopRuntimeG6Layout(graph) {
+			try {
+				graph.stopLayout?.();
+			} catch {}
+		}
 		/** Bound a force layout even when the renderer's completion promise never settles. */
 		async function renderRuntimeG6WithBudget(graph) {
 			let timer;
 			const budget = new Promise((resolve) => {
 				timer = setTimeout(() => {
-					graph.stopLayout?.();
+					stopRuntimeG6Layout(graph);
 					resolve();
 				}, 800);
 			});
 			await Promise.race([Promise.resolve(graph.render()).then(() => void 0), budget]);
 			if (timer !== void 0) clearTimeout(timer);
-			graph.stopLayout?.();
+			stopRuntimeG6Layout(graph);
 		}
 		function preserveRuntimeG6Positions(graph, data) {
 			if (graph.getElementPosition === void 0) return data;
@@ -126084,11 +126115,10 @@ ${indent}columns: ${matrix.columns}
 					},
 					manyBody: { strength: -340 },
 					center: { strength: .045 },
-					collide: {
-						radius: (datum) => runtimeG6CollisionRadius(datum.size ?? 58),
-						strength: 1,
-						iterations: 5
-					}
+					preventOverlap: true,
+					nodeSpacing: 48,
+					collideStrength: 1,
+					collideIterations: 5
 				},
 				behaviors: [
 					{
@@ -126101,9 +126131,9 @@ ${indent}columns: ${matrix.columns}
 						sensitivity: 1
 					},
 					{
-						type: "drag-element-force",
-						key: "drag-element-force",
-						fixed: true,
+						type: "drag-element",
+						key: "drag-element",
+						animation: false,
 						hideEdge: "none",
 						onFinish: (ids) => {
 							onDragFinish(ids);
@@ -126196,7 +126226,6 @@ ${indent}columns: ${matrix.columns}
 				const handleDragFinish = (ids) => {
 					const graph = graphRef.current;
 					if (graph === void 0) return;
-					graph.stopLayout();
 					const next = { ...savedPositionsRef.current };
 					for (const id of ids) {
 						const node = nodesRef.current.find((item) => item.id === id);
@@ -126290,9 +126319,8 @@ ${indent}columns: ${matrix.columns}
 				const topology = runtimeG6TopologyKey(data);
 				const selectionChanged = selectedRef.current !== focusKey;
 				selectedRef.current = focusKey;
-				syncRuntimeG6Data(graph, data, topologyRef.current, visualRef.current).then(async (update) => {
+				syncRuntimeG6Data(graph, data, topologyRef.current, visualRef.current).then(async () => {
 					if (disposed) return;
-					if (update === "render") graph.stopLayout();
 					topologyRef.current = topology;
 					visualRef.current = runtimeG6VisualKey(data);
 					renderRuntimeG6Frame(graph);

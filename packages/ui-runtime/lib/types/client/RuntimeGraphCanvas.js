@@ -3,7 +3,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowsPointingInIcon, MagnifyingGlassMinusIcon, MagnifyingGlassPlusIcon, } from '@heroicons/react/24/outline';
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives';
-import { buildRuntimeG6Data, renderRuntimeG6WithBudget, runtimeG6CollisionRadius, runtimeG6DisplayLabel, runtimeG6EdgeMetadata, runtimeG6NodeMetadata, runtimeG6TopologyKey, runtimeG6VisualKey, syncRuntimeG6Data, } from "./g6-graph.js";
+import { buildRuntimeG6Data, renderRuntimeG6WithBudget, RUNTIME_G6_COLLISION_GAP, runtimeG6DisplayLabel, runtimeG6EdgeMetadata, runtimeG6NodeMetadata, runtimeG6TopologyKey, runtimeG6VisualKey, syncRuntimeG6Data, } from "./g6-graph.js";
 import { loadG6 } from "./g6-runtime.js";
 import css from './RuntimeExplorer.module.css';
 const STATUS_COLORS = {
@@ -285,17 +285,20 @@ function graphOptions(container, data, onDragFinish, t) {
             link: { distance: 178, strength: 0.66 },
             manyBody: { strength: -340 },
             center: { strength: 0.045 },
-            collide: {
-                radius: (datum) => runtimeG6CollisionRadius(datum.size ?? 58),
-                strength: 1,
-                iterations: 5,
-            },
+            // Use G6's computed node size instead of reading the layout adapter's
+            // wrapper datum. This keeps collision radii correct for large hubs.
+            preventOverlap: true,
+            nodeSpacing: RUNTIME_G6_COLLISION_GAP * 2,
+            collideStrength: 1,
+            collideIterations: 5,
         },
         behaviors: [
             { type: 'drag-canvas', key: 'drag-canvas' },
             { type: 'zoom-canvas', key: 'zoom-canvas', sensitivity: 1 },
             {
-                type: 'drag-element-force', key: 'drag-element-force', fixed: true, hideEdge: 'none',
+                // The force instance is deliberately released after the bounded initial
+                // layout. Plain element dragging remains available after that release.
+                type: 'drag-element', key: 'drag-element', animation: false, hideEdge: 'none',
                 onFinish: (ids) => { onDragFinish(ids); },
             },
             { type: 'auto-adapt-label', key: 'auto-adapt-label' },
@@ -374,10 +377,6 @@ export function RuntimeGraphCanvas({ nodes, edges, fibers, services, serviceRela
             const graph = graphRef.current;
             if (graph === undefined)
                 return;
-            // G6's force-drag behavior reheats the d3 simulation. Explicitly stop it
-            // once the persisted position is captured so an interrupted pointer
-            // sequence cannot leave the renderer ticking indefinitely.
-            graph.stopLayout();
             const next = { ...savedPositionsRef.current };
             for (const id of ids) {
                 const node = nodesRef.current.find(item => item.id === id);
@@ -462,11 +461,9 @@ export function RuntimeGraphCanvas({ nodes, edges, fibers, services, serviceRela
         const topology = runtimeG6TopologyKey(data);
         const selectionChanged = selectedRef.current !== focusKey;
         selectedRef.current = focusKey;
-        void syncRuntimeG6Data(graph, data, topologyRef.current, visualRef.current).then(async (update) => {
+        void syncRuntimeG6Data(graph, data, topologyRef.current, visualRef.current).then(async () => {
             if (disposed)
                 return;
-            if (update === 'render')
-                graph.stopLayout();
             topologyRef.current = topology;
             visualRef.current = runtimeG6VisualKey(data);
             renderRuntimeG6Frame(graph);
