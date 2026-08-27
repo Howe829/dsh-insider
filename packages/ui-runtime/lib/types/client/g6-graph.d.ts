@@ -71,6 +71,12 @@ export declare function runtimeG6DisplayLabel(label: string, maxLineLength?: num
 export declare function runtimeG6NodeSize(degree: number, selected?: boolean, label?: string): number;
 /** Collision radius passed to G6, including label-safe whitespace around each circle. */
 export declare function runtimeG6CollisionRadius(size: number): number;
+/**
+ * Move only the node the user released until it clears its visible neighbours.
+ * This deliberately does not restart the force layout: manually placed nodes
+ * stay where the user put them, while the released node cannot cover a peer.
+ */
+export declare function resolveRuntimeG6DraggedNodePosition(draggedId: string, target: ArrayLike<number>, nodes: readonly NodeData[], positions: ReadonlyMap<string, ArrayLike<number>>): readonly [number, number];
 /** Safely read the metadata placed on a G6 node datum by this adapter. */
 export declare function runtimeG6NodeMetadata(node: NodeData): RuntimeG6NodeMetadata;
 /** Safely read the metadata placed on a G6 edge datum by this adapter. */

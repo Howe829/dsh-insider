@@ -166,6 +166,64 @@ export function runtimeG6CollisionRadius(size: number): number {
   return Math.max(0, size) / 2 + RUNTIME_G6_COLLISION_GAP
 }
 
+/**
+ * Move only the node the user released until it clears its visible neighbours.
+ * This deliberately does not restart the force layout: manually placed nodes
+ * stay where the user put them, while the released node cannot cover a peer.
+ */
+export function resolveRuntimeG6DraggedNodePosition(
+  draggedId: string,
+  target: ArrayLike<number>,
+  nodes: readonly NodeData[],
+  positions: ReadonlyMap<string, ArrayLike<number>>,
+): readonly [number, number] {
+  const dragged = nodes.find(node => String(node.id) === draggedId)
+  const initialX = target[0]
+  const initialY = target[1]
+  if (dragged === undefined || !Number.isFinite(initialX) || !Number.isFinite(initialY)) {
+    return [0, 0]
+  }
+  const draggedRadius = runtimeG6CollisionRadius(runtimeG6NodeMetadata(dragged).size)
+  const blockers = nodes.flatMap((node) => {
+    const id = String(node.id)
+    if (id === draggedId) return []
+    const position = positions.get(id)
+    const x = position?.[0]
+    const y = position?.[1]
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return []
+    return [{
+      id,
+      x: Number(x),
+      y: Number(y),
+      radius: runtimeG6CollisionRadius(runtimeG6NodeMetadata(node).size),
+    }]
+  })
+  let x = Number(initialX)
+  let y = Number(initialY)
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    let moved = false
+    for (const blocker of blockers) {
+      let dx = x - blocker.x
+      let dy = y - blocker.y
+      if (dx === 0 && dy === 0) {
+        const seed = [...`${draggedId}:${blocker.id}`].reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 0)
+        const angle = seed / 0x1_0000_0000 * Math.PI * 2
+        dx = Math.cos(angle)
+        dy = Math.sin(angle)
+      }
+      const distance = Math.max(0.001, Math.hypot(dx, dy))
+      const requiredDistance = draggedRadius + blocker.radius
+      if (distance >= requiredDistance) continue
+      const offset = requiredDistance - distance + 0.01
+      x += dx / distance * offset
+      y += dy / distance * offset
+      moved = true
+    }
+    if (!moved) break
+  }
+  return [x, y]
+}
+
 /** Safely read the metadata placed on a G6 node datum by this adapter. */
 export function runtimeG6NodeMetadata(node: NodeData): RuntimeG6NodeMetadata {
   return node.data as unknown as RuntimeG6NodeMetadata

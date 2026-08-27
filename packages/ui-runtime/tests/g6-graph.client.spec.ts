@@ -5,7 +5,8 @@ import type {
 import {
   buildRuntimeG6Data, RUNTIME_G6_INITIAL_SPACING, RUNTIME_G6_LAYOUT_BUDGET_MS, runtimeG6CollisionRadius,
   runtimeG6DisplayLabel, runtimeG6EdgeMetadata, runtimeG6NodeCategory, runtimeG6NodeMetadata,
-  runtimeG6NodeSize, runtimeG6TopologyKey, runtimeG6VisualKey, stopRuntimeG6Layout, syncRuntimeG6Data,
+  runtimeG6NodeSize, runtimeG6TopologyKey, runtimeG6VisualKey, resolveRuntimeG6DraggedNodePosition,
+  stopRuntimeG6Layout, syncRuntimeG6Data,
 } from '../src/client/g6-graph.ts'
 import type { RuntimeGraphRelations } from '../src/client/graph.ts'
 
@@ -237,6 +238,24 @@ describe('G6 runtime graph projection', () => {
     expect(runtimeG6NodeSize(10_000)).toBe(108)
     expect(runtimeG6NodeSize(0, false, 'session-persistence')).toBeGreaterThan(runtimeG6NodeSize(0))
     expect(runtimeG6CollisionRadius(108)).toBeGreaterThan(108 / 2)
+  })
+
+  it('resolves a released node collision without changing any neighbouring placement', () => {
+    const data = buildRuntimeG6Data(
+      [node('dragged'), node('fixed-neighbour')], [], [], [], [], { nodes: new Map(), edges: new Map() }, undefined, {},
+    )
+    const positions = new Map<string, ArrayLike<number>>([
+      ['dragged', [320, 180]],
+      ['fixed-neighbour', [320, 180]],
+    ])
+    const resolved = resolveRuntimeG6DraggedNodePosition('dragged', positions.get('dragged')!, data.nodes, positions)
+    const neighbour = positions.get('fixed-neighbour')!
+    const draggedRadius = runtimeG6CollisionRadius(runtimeG6NodeMetadata(data.nodes[0]!).size)
+    const neighbourRadius = runtimeG6CollisionRadius(runtimeG6NodeMetadata(data.nodes[1]!).size)
+    expect(resolved).not.toEqual([320, 180])
+    expect(neighbour).toEqual([320, 180])
+    expect(Math.hypot(resolved[0] - neighbour[0]!, resolved[1] - neighbour[1]!))
+      .toBeGreaterThanOrEqual(draggedRadius + neighbourRadius)
   })
 
   it('seeds every unpinned node at a stable non-overlapping coordinate', () => {

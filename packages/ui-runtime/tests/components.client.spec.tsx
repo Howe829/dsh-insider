@@ -20,8 +20,8 @@ const g6State = vi.hoisted(() => ({ instances: [] as Array<{
   stopLayoutCalls: number
   rendererConfigCalls: Array<Record<string, unknown>>
   layerRenderCalls: number
-  layerCancelCalls: number
   tooltipHideCalls: number
+  translateCalls: Array<{ id: string, position: readonly [number, number] }>
   emit: (name: string, event?: Record<string, unknown>) => void
 }> }))
 
@@ -36,8 +36,8 @@ vi.mock('../src/client/g6-runtime.ts', () => {
     stopLayoutCalls = 0
     rendererConfigCalls: Array<Record<string, unknown>> = []
     layerRenderCalls = 0
-    layerCancelCalls = 0
     tooltipHideCalls = 0
+    translateCalls: Array<{ id: string, position: readonly [number, number] }> = []
     private readonly events = new Map<string, Array<(...args: any[]) => void>>()
 
     constructor(options: Record<string, any>) {
@@ -52,9 +52,7 @@ vi.mock('../src/client/g6-runtime.ts', () => {
     async layout() { this.layoutCalls += 1 }
     stopLayout() { this.stopLayoutCalls += 1 }
     private readonly layer = {
-      frameId: 17 as number | undefined,
       render: () => { this.layerRenderCalls += 1 },
-      cancelAnimationFrame: () => { this.layerCancelCalls += 1 },
     }
     getCanvas() {
       return {
@@ -70,6 +68,11 @@ vi.mock('../src/client/g6-runtime.ts', () => {
     getElementPosition(id: string) {
       const node = this.data.nodes.find(item => item.id === id)
       return [node?.style?.x ?? 220, node?.style?.y ?? 240, 0]
+    }
+    async translateElementTo(id: string, position: readonly [number, number]) {
+      this.translateCalls.push({ id, position })
+      const node = this.data.nodes.find(item => item.id === id)
+      if (node !== undefined) node.style = { ...node.style, x: position[0], y: position[1] }
     }
     on(name: string, handler: (...args: any[]) => void) {
       const handlers = this.events.get(name) ?? []
@@ -471,7 +474,7 @@ describe('RuntimeExplorer', () => {
     expect(graph.layoutCalls).toBe(0)
   })
 
-  it('filters the real graph projection, selects a plugin, and renders service/effect diagnostics', async () => {
+  it('keeps G6 automatic rendering enabled so relationship edges survive viewport transforms', async () => {
     const b = explorer()
     expect(screen.getByRole('heading', { name: en.title })).toBeTruthy()
     expect(screen.queryByText('Runtime Explorer')).toBeNull()
@@ -486,11 +489,10 @@ describe('RuntimeExplorer', () => {
     let graph = g6State.instances[0]!
     expect(graph.stopLayoutCalls).toBeGreaterThan(0)
     expect(graph.rendererConfigCalls).toContainEqual({
-      enableAutoRendering: false,
+      enableAutoRendering: true,
       enableDirtyCheck: true,
       enableRenderingOptimization: true,
     })
-    expect(graph.layerCancelCalls).toBe(1)
     expect(graph.layerRenderCalls).toBeGreaterThan(0)
     expect(graph.data.nodes.map(node => node.id)).not.toContain('missing:consumer:tools')
     const ownsLegend = screen.getByLabelText(en.edgeTypes).querySelector<HTMLElement>('[data-edge-kind="owns"]')!
@@ -837,6 +839,7 @@ describe('RuntimeExplorer', () => {
     dragged.style = { ...dragged.style, x: 220, y: 240 }
     act(() => drag.onFinish(['provider']))
     expect(graph.stopLayoutCalls).toBe(stopLayoutCallsBeforeDrag)
+    await waitFor(() => expect(window.localStorage.getItem('dsh-runtime:graph-layout:v1:fixture-web')).not.toBeNull())
     const saved = JSON.parse(window.localStorage.getItem('dsh-runtime:graph-layout:v1:fixture-web') as string)
     expect(saved.positions.provider).toEqual({ x: 220, y: 240, pinned: true })
 
@@ -879,6 +882,31 @@ describe('RuntimeExplorer', () => {
     await waitFor(() => expect(g6State.instances).toHaveLength(2))
     expect(JSON.parse(window.localStorage.getItem('dsh-runtime:graph-layout:v1:fixture-web') as string).positions)
       .toEqual({})
+  })
+
+  it('snaps only a released node away from an overlapping neighbour without restarting layout', async () => {
+    explorer()
+    await waitFor(() => expect(g6State.instances).toHaveLength(1))
+    const graph = g6State.instances[0]!
+    const drag = (graph.options as Record<string, any>).behaviors.find(
+      (item: Record<string, any>) => item.type === 'drag-element',
+    )
+    const provider = graph.data.nodes.find(item => item.id === 'provider')!
+    const consumer = graph.data.nodes.find(item => item.id === 'consumer')!
+    provider.style = { ...provider.style, x: 220, y: 240 }
+    consumer.style = { ...consumer.style, x: 220, y: 240 }
+    const stopLayoutCallsBeforeDrag = graph.stopLayoutCalls
+
+    act(() => drag.onFinish(['provider']))
+
+    expect(graph.stopLayoutCalls).toBe(stopLayoutCallsBeforeDrag)
+    await waitFor(() => expect(graph.translateCalls).toHaveLength(1))
+    expect(graph.translateCalls[0]?.id).toBe('provider')
+    expect(consumer.style).toMatchObject({ x: 220, y: 240 })
+    await waitFor(() => expect(window.localStorage.getItem('dsh-runtime:graph-layout:v1:fixture-web')).not.toBeNull())
+    const saved = JSON.parse(window.localStorage.getItem('dsh-runtime:graph-layout:v1:fixture-web') as string)
+    expect(saved.positions.provider).toMatchObject({ pinned: true })
+    expect(Math.hypot(saved.positions.provider.x - 220, saved.positions.provider.y - 240)).toBeGreaterThan(120)
   })
 
   it('reconciles a removed selection and clears process-local selection after a boot change', () => {

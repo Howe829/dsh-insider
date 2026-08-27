@@ -11,7 +11,7 @@ import type {
 } from '@deepseek-ai/dsh-api-remotes/client'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
-  buildRuntimeG6Data, renderRuntimeG6WithBudget, RUNTIME_G6_COLLISION_GAP, runtimeG6DisplayLabel,
+  buildRuntimeG6Data, renderRuntimeG6WithBudget, RUNTIME_G6_COLLISION_GAP, resolveRuntimeG6DraggedNodePosition, runtimeG6DisplayLabel,
   runtimeG6EdgeMetadata, runtimeG6NodeMetadata,
   type RuntimeG6Focus, type RuntimeG6NodeCategory,
   runtimeG6TopologyKey, runtimeG6VisualKey, syncRuntimeG6Data,
@@ -383,8 +383,6 @@ function graphOptions(
 }
 
 interface RuntimeG6Layer {
-  frameId: number | undefined
-  cancelAnimationFrame: (frameId: number) => void
   render: () => void
 }
 
@@ -396,24 +394,16 @@ function renderRuntimeG6Frame(graph: Graph): void {
   for (const layer of runtimeG6Layers(graph)) layer.render()
 }
 
-function suspendRuntimeG6AutoRendering(graph: Graph): void {
+/** Keep G6's renderer active while viewport transforms are being optimized. */
+function configureRuntimeG6Rendering(graph: Graph): void {
   const canvas = graph.getCanvas()
   const layers = Object.keys(canvas.getLayers()) as Array<Parameters<typeof canvas.getRenderer>[0]>
   for (const layer of layers) {
     canvas.getRenderer(layer).setConfig({
-      enableAutoRendering: false,
+      enableAutoRendering: true,
       enableDirtyCheck: true,
       enableRenderingOptimization: true,
     })
-  }
-  // @antv/g starts a perpetual requestAnimationFrame loop before G6 exposes the
-  // canvas. Disabling the renderer option prevents future loops, while cancelling
-  // the already-scheduled frame makes a settled graph genuinely idle.
-  for (const layer of runtimeG6Layers(graph)) {
-    if (layer.frameId !== undefined) {
-      layer.cancelAnimationFrame(layer.frameId)
-      layer.frameId = undefined
-    }
   }
 }
 
@@ -450,18 +440,40 @@ export function RuntimeGraphCanvas({
     if (container === null) return
     let disposed = false
     const handleDragFinish = (ids: string[]): void => {
-      const graph = graphRef.current
-      if (graph === undefined) return
-      const next = { ...savedPositionsRef.current }
-      for (const id of ids) {
-        const node = nodesRef.current.find(item => item.id === id)
-        if (node === undefined) continue
-        const position = graph.getElementPosition(id)
-        const x = position[0] ?? 0
-        const y = position[1] ?? 0
-        next[node.logicalKey] = { x, y, pinned: true }
-      }
-      callbacksRef.current.onPositionsChange(next)
+      // G6 calls onFinish before it closes its drag batch. Defer one microtask
+      // so the final pointer translation cannot overwrite this collision snap.
+      queueMicrotask(() => {
+        const graph = graphRef.current
+        const graphData = dataRef.current
+        if (disposed || graph === undefined || graphData === undefined) return
+        const renderedPositions = new Map(graphData.nodes.flatMap((node) => {
+          const position = graph.getElementPosition(String(node.id))
+          return Number.isFinite(position[0]) && Number.isFinite(position[1])
+            ? [[String(node.id), position] as const]
+            : []
+        }))
+        const next = { ...savedPositionsRef.current }
+        const translations: Array<Promise<unknown>> = []
+        for (const id of ids) {
+          const node = nodesRef.current.find(item => item.id === id)
+          if (node === undefined) continue
+          const position = renderedPositions.get(id)
+          if (position === undefined) continue
+          const [x, y] = resolveRuntimeG6DraggedNodePosition(id, position, graphData.nodes, renderedPositions)
+          if (x !== position[0] || y !== position[1]) {
+            // This updates one released node only; no force-layout restart means
+            // nearby nodes and all prior manual placements remain stable.
+            translations.push(graph.translateElementTo(id, [x, y], false))
+            renderedPositions.set(id, [x, y])
+          }
+          next[node.logicalKey] = { x, y, pinned: true }
+        }
+        void Promise.all(translations).then(() => {
+          if (!disposed && graphRef.current === graph) callbacksRef.current.onPositionsChange(next)
+        }).catch(() => {
+          // Keep the prior persisted position if G6 rejects the corrective move.
+        })
+      })
     }
     void loadG6().then(async ({ Graph: G6Graph }) => {
       if (disposed || dataRef.current === undefined) return
@@ -501,7 +513,7 @@ export function RuntimeGraphCanvas({
         topologyRef.current = runtimeG6TopologyKey(dataRef.current)
         visualRef.current = runtimeG6VisualKey(dataRef.current)
         await graph.fitView({ when: 'always', direction: 'both' }, false)
-        suspendRuntimeG6AutoRendering(graph)
+        configureRuntimeG6Rendering(graph)
         renderRuntimeG6Frame(graph)
         if (!disposed && graphRef.current === graph) setZoom(graph.getZoom())
       } catch {
