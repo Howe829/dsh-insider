@@ -659,6 +659,40 @@ describe('RuntimeExplorer', () => {
     ])
   })
 
+  it('collapses the Service category to the selected Service and its related plugins', async () => {
+    const snapshot: RuntimeExplorerSnapshot = {
+      ...DATA,
+      graph: {
+        ...DATA.graph,
+        services: [
+          ...DATA.graph.services,
+          {
+            id: 'service-storage', name: 'storage', providerNodeId: 'unmounted',
+            providerEntryId: 'unmounted-entry', phase: 'active',
+          },
+        ],
+      },
+    }
+    const b = explorer({ data: snapshot, loading: false, error: undefined })
+    await waitFor(() => expect(g6State.instances).toHaveLength(1))
+    const graph = g6State.instances[0]!
+
+    fireEvent.click(screen.getByRole('button', { name: en.serviceNode, exact: true }))
+    await waitFor(() => expect(graph.data.nodes.filter(node => node.id.startsWith('service:')).map(node => node.id).sort())
+      .toEqual(['service:service-llm', 'service:service-storage']))
+
+    fireEvent.click(await screen.findByRole('button', { name: /^llm,/ }))
+
+    expect(b.store.getSnapshot().selection).toEqual({ kind: 'service', id: 'service-llm' })
+    await waitFor(() => expect(graph.data.nodes.map(node => node.id).sort()).toEqual([
+      'consumer', 'provider', 'service:service-llm',
+    ]))
+    expect(graph.data.nodes.map(node => node.id)).not.toContain('service:service-storage')
+    expect(graph.data.edges.map(edge => edge.id).sort()).toEqual([
+      'injects:consumer->service-llm', 'provides:provider->service-llm',
+    ])
+  })
+
   it('keeps graph selection consistent with search and offers an explicit show-all action', () => {
     const b = explorer()
     fireEvent.click(screen.getByRole('button', { name: /consumer/ }))
