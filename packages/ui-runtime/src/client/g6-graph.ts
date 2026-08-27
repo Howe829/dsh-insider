@@ -2,12 +2,14 @@
 
 import type { EdgeData, GraphData, NodeData } from '@antv/g6'
 import type {
-  RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation,
+  RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation, RuntimeGraphSnapshot,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { RuntimeGraphRelations, RuntimeGraphSavedPositions } from './graph.ts'
 import { runtimeLifecycleStatus } from './graph.ts'
 
-export type RuntimeG6NodeKind = 'plugin' | 'service' | 'missing-service'
+type RuntimeGraphFiberNode = RuntimeGraphSnapshot['fibers'][number]
+
+export type RuntimeG6NodeKind = 'plugin' | 'fiber' | 'service' | 'missing-service'
 
 /** Visual role inferred from the plugin package name and its runtime label. */
 export type RuntimeG6NodeCategory =
@@ -18,6 +20,7 @@ export type RuntimeG6NodeCategory =
   | 'session'
   | 'interface'
   | 'extension'
+  | 'fiber'
   | 'service'
   | 'missing'
 
@@ -38,12 +41,17 @@ export interface RuntimeG6NodeMetadata {
   readonly service?: string
   readonly providerNodeId?: string
   readonly providerEntryId?: string
+  readonly ownerNodeId?: string
+  readonly ownerEntryId?: string
+  readonly parentFiberId?: string
+  readonly fiberUid?: number
+  readonly entryRoot?: boolean
   readonly consumerCount?: number
   readonly order?: number
 }
 
 export interface RuntimeG6EdgeMetadata {
-  readonly kind: 'injects' | 'provides' | 'missing'
+  readonly kind: 'injects' | 'provides' | 'owns' | 'parent' | 'missing'
   readonly relation?: string
   readonly services: readonly string[]
 }
@@ -53,16 +61,48 @@ export interface RuntimeG6GraphData extends GraphData {
   readonly edges: EdgeData[]
 }
 
-/** The graph focus can be either a Loader plugin or one exact scoped Service implementation. */
+/** The graph focus can be a Loader plugin, Fiber instance, or exact scoped Service implementation. */
 export type RuntimeG6Focus =
   | { readonly kind: 'plugin'; readonly id: string }
+  | { readonly kind: 'fiber'; readonly id: string }
   | { readonly kind: 'service'; readonly id: string }
 
 const MIN_PLUGIN_SIZE = 76
 const MAX_PLUGIN_SIZE = 108
 const MISSING_SERVICE_SIZE = 58
 const SERVICE_SIZE = 72
+const FIBER_SIZE = 64
 export const RUNTIME_G6_COLLISION_GAP = 24
+export const RUNTIME_G6_INITIAL_SPACING = MAX_PLUGIN_SIZE + RUNTIME_G6_COLLISION_GAP * 2
+
+/**
+ * Give the force simulation a deterministic, non-overlapping starting point.
+ * G6 otherwise initializes many newly materialized Fiber nodes at the same
+ * coordinate, and the bounded layout budget can expire before they separate.
+ */
+export function seedRuntimeG6Positions(nodes: readonly NodeData[]): NodeData[] {
+  const pending = nodes
+    .filter(node => !Number.isFinite(node.style?.x) || !Number.isFinite(node.style?.y))
+    .map(node => String(node.id))
+    .sort()
+  if (pending.length === 0) return [...nodes]
+
+  const columns = Math.ceil(Math.sqrt(pending.length))
+  const rows = Math.ceil(pending.length / columns)
+  const positionById = new Map(pending.map((id, index) => {
+    const column = index % columns
+    const row = Math.floor(index / columns)
+    return [id, {
+      x: (column - (columns - 1) / 2) * RUNTIME_G6_INITIAL_SPACING,
+      y: (row - (rows - 1) / 2) * RUNTIME_G6_INITIAL_SPACING,
+    }] as const
+  }))
+
+  return nodes.map((node) => {
+    const position = positionById.get(String(node.id))
+    return position === undefined ? node : { ...node, style: { ...node.style, ...position } }
+  })
+}
 
 /**
  * Infer a stable, explainable visual category from DSH package conventions.
@@ -71,7 +111,7 @@ export const RUNTIME_G6_COLLISION_GAP = 24
 export function runtimeG6NodeCategory(
   moduleName: string,
   label: string,
-): Exclude<RuntimeG6NodeCategory, 'service' | 'missing'> {
+): Exclude<RuntimeG6NodeCategory, 'fiber' | 'service' | 'missing'> {
   const name = `${moduleName} ${label}`.toLowerCase()
   const short = label.toLowerCase()
   if (name.includes('cordis') || ['runtime', 'loader', 'app-boot', 'boot'].includes(short)) return 'core'
@@ -126,6 +166,64 @@ export function runtimeG6CollisionRadius(size: number): number {
   return Math.max(0, size) / 2 + RUNTIME_G6_COLLISION_GAP
 }
 
+/**
+ * Move only the node the user released until it clears its visible neighbours.
+ * This deliberately does not restart the force layout: manually placed nodes
+ * stay where the user put them, while the released node cannot cover a peer.
+ */
+export function resolveRuntimeG6DraggedNodePosition(
+  draggedId: string,
+  target: ArrayLike<number>,
+  nodes: readonly NodeData[],
+  positions: ReadonlyMap<string, ArrayLike<number>>,
+): readonly [number, number] {
+  const dragged = nodes.find(node => String(node.id) === draggedId)
+  const initialX = target[0]
+  const initialY = target[1]
+  if (dragged === undefined || !Number.isFinite(initialX) || !Number.isFinite(initialY)) {
+    return [0, 0]
+  }
+  const draggedRadius = runtimeG6CollisionRadius(runtimeG6NodeMetadata(dragged).size)
+  const blockers = nodes.flatMap((node) => {
+    const id = String(node.id)
+    if (id === draggedId) return []
+    const position = positions.get(id)
+    const x = position?.[0]
+    const y = position?.[1]
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return []
+    return [{
+      id,
+      x: Number(x),
+      y: Number(y),
+      radius: runtimeG6CollisionRadius(runtimeG6NodeMetadata(node).size),
+    }]
+  })
+  let x = Number(initialX)
+  let y = Number(initialY)
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    let moved = false
+    for (const blocker of blockers) {
+      let dx = x - blocker.x
+      let dy = y - blocker.y
+      if (dx === 0 && dy === 0) {
+        const seed = [...`${draggedId}:${blocker.id}`].reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 0)
+        const angle = seed / 0x1_0000_0000 * Math.PI * 2
+        dx = Math.cos(angle)
+        dy = Math.sin(angle)
+      }
+      const distance = Math.max(0.001, Math.hypot(dx, dy))
+      const requiredDistance = draggedRadius + blocker.radius
+      if (distance >= requiredDistance) continue
+      const offset = requiredDistance - distance + 0.01
+      x += dx / distance * offset
+      y += dy / distance * offset
+      moved = true
+    }
+    if (!moved) break
+  }
+  return [x, y]
+}
+
 /** Safely read the metadata placed on a G6 node datum by this adapter. */
 export function runtimeG6NodeMetadata(node: NodeData): RuntimeG6NodeMetadata {
   return node.data as unknown as RuntimeG6NodeMetadata
@@ -143,6 +241,7 @@ export function runtimeG6EdgeMetadata(edge: EdgeData): RuntimeG6EdgeMetadata {
 export function buildRuntimeG6Data(
   nodes: readonly RuntimeGraphNode[],
   edges: readonly RuntimeGraphEdge[],
+  fibers: readonly RuntimeGraphFiberNode[],
   services: readonly RuntimeGraphServiceNode[],
   serviceRelations: readonly RuntimeGraphServiceRelation[],
   relations: RuntimeGraphRelations,
@@ -151,6 +250,7 @@ export function buildRuntimeG6Data(
   showAllServices = false,
 ): RuntimeG6GraphData {
   const selectedPluginId = focus?.kind === 'plugin' ? focus.id : undefined
+  const selectedFiberId = focus?.kind === 'fiber' ? focus.id : undefined
   const selectedServiceId = focus?.kind === 'service' ? focus.id : undefined
   const degree = new Map<string, number>()
   const nodeIds = new Set(nodes.map(node => node.id))
@@ -188,7 +288,7 @@ export function buildRuntimeG6Data(
     }
   })
 
-  const focusedServiceRelations = focus === undefined
+  const focusedServiceRelations = focus === undefined || focus.kind === 'fiber'
     ? []
     : serviceRelations.filter(relation => (
       (focus.kind === 'service'
@@ -216,6 +316,61 @@ export function buildRuntimeG6Data(
       } satisfies RuntimeG6EdgeMetadata as unknown as Record<string, unknown>,
     }]
   })
+
+  const visibleFiberIds = new Set(fibers.map(fiber => fiber.id))
+  for (const fiber of fibers) {
+    const id = `fiber:${fiber.id}`
+    const selected = fiber.id === selectedFiberId
+    const size = FIBER_SIZE + (selected ? 8 : 0)
+    projectedNodes.push({
+      id,
+      size,
+      data: {
+        kind: 'fiber',
+        label: `#${fiber.uid} ${fiber.name}`,
+        moduleName: fiber.moduleName,
+        phase: runtimeLifecycleStatus(fiber.phase),
+        category: 'fiber',
+        ...(selected ? { relation: 'selected' } : {}),
+        size,
+        pinned: false,
+        provides: [...fiber.provides],
+        injects: [...fiber.injects],
+        missing: [...fiber.missing],
+        effectCount: fiber.effectCount,
+        ...(fiber.ownerNodeId === undefined ? {} : { ownerNodeId: fiber.ownerNodeId }),
+        ...(fiber.ownerEntryId === undefined ? {} : { ownerEntryId: fiber.ownerEntryId }),
+        ...(fiber.parentFiberId === undefined ? {} : { parentFiberId: fiber.parentFiberId }),
+        fiberUid: fiber.uid,
+        entryRoot: fiber.entryRoot,
+      } satisfies RuntimeG6NodeMetadata as unknown as Record<string, unknown>,
+      states: selected ? ['selected'] : [],
+    })
+    if (fiber.ownerNodeId !== undefined && nodeIds.has(fiber.ownerNodeId)) {
+      projectedEdges.push({
+        id: `owns:${fiber.ownerNodeId}->${fiber.id}`,
+        source: fiber.ownerNodeId,
+        target: id,
+        data: {
+          kind: 'owns',
+          ...(selectedPluginId === fiber.ownerNodeId ? { relation: 'related' } : {}),
+          services: [],
+        } satisfies RuntimeG6EdgeMetadata as unknown as Record<string, unknown>,
+      })
+    }
+    if (fiber.parentFiberId !== undefined && visibleFiberIds.has(fiber.parentFiberId)) {
+      projectedEdges.push({
+        id: `parent:${fiber.parentFiberId}->${fiber.id}`,
+        source: `fiber:${fiber.parentFiberId}`,
+        target: id,
+        data: {
+          kind: 'parent',
+          ...(selected ? { relation: 'dependency' } : {}),
+          services: [],
+        } satisfies RuntimeG6EdgeMetadata as unknown as Record<string, unknown>,
+      })
+    }
+  }
 
   const serviceById = new Map(services.map(service => [service.id, service]))
   const visibleServiceIds = new Set(showAllServices
@@ -326,7 +481,29 @@ export function buildRuntimeG6Data(
     })
   }
 
-  return { nodes: projectedNodes, edges: projectedEdges }
+  const selectedFiber = selectedFiberId === undefined ? undefined : fibers.find(fiber => fiber.id === selectedFiberId)
+  for (const [index, service] of (selectedFiber?.missing ?? []).entries()) {
+    const id = `missing:fiber:${selectedFiberId}:${service}`
+    projectedNodes.push({
+      id,
+      size: MISSING_SERVICE_SIZE,
+      data: {
+        kind: 'missing-service', label: service, phase: 'missing', category: 'missing', relation: 'dependency',
+        size: MISSING_SERVICE_SIZE, pinned: false, provides: [], injects: [], missing: [service], effectCount: 0,
+        service, order: index,
+      } satisfies RuntimeG6NodeMetadata as unknown as Record<string, unknown>,
+    })
+    projectedEdges.push({
+      id: `missing-edge:fiber:${selectedFiberId}:${service}`,
+      source: `fiber:${selectedFiberId}`,
+      target: id,
+      data: {
+        kind: 'missing', relation: 'dependency', services: [service],
+      } as RuntimeG6EdgeMetadata as unknown as Record<string, unknown>,
+    })
+  }
+
+  return { nodes: seedRuntimeG6Positions(projectedNodes), edges: projectedEdges }
 }
 
 /** Count concrete scoped Service nodes currently materialized in focus mode. */
@@ -341,11 +518,53 @@ export function runtimeG6TopologyKey(data: RuntimeG6GraphData): string {
   return `${nodes.join('|')}::${edges.join('|')}`
 }
 
+/** Renderer-visible identity; tooltip-only metadata does not require a canvas redraw. */
+export function runtimeG6VisualKey(data: RuntimeG6GraphData): string {
+  const nodes = data.nodes.map((node) => {
+    const metadata = runtimeG6NodeMetadata(node)
+    return [
+      String(node.id), metadata.label, metadata.phase, metadata.category,
+      metadata.relation ?? '', metadata.size, metadata.pinned, [...(node.states ?? [])].sort(),
+    ]
+  }).sort((left, right) => String(left[0]).localeCompare(String(right[0])))
+  const edges = data.edges.map((edge) => {
+    const metadata = runtimeG6EdgeMetadata(edge)
+    return [String(edge.id), metadata.kind, metadata.relation ?? '']
+  }).sort((left, right) => String(left[0]).localeCompare(String(right[0])))
+  return JSON.stringify({ nodes, edges })
+}
+
 export interface RuntimeG6GraphPort {
   setData: (data: GraphData) => void
   render: () => unknown | Promise<unknown>
   draw: () => unknown | Promise<unknown>
+  stopLayout?: () => void
   getElementPosition?: (id: string) => ArrayLike<number>
+}
+
+export const RUNTIME_G6_LAYOUT_BUDGET_MS = 800
+
+/** G6 releases a completed layout before its public stop hook becomes a no-op. */
+export function stopRuntimeG6Layout(graph: RuntimeG6GraphPort): void {
+  try {
+    graph.stopLayout?.()
+  } catch {
+    // The layout has already completed and released its internal instance.
+  }
+}
+
+/** Bound a force layout even when the renderer's completion promise never settles. */
+export async function renderRuntimeG6WithBudget(graph: RuntimeG6GraphPort): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const budget = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      stopRuntimeG6Layout(graph)
+      resolve()
+    }, RUNTIME_G6_LAYOUT_BUDGET_MS)
+  })
+  await Promise.race([Promise.resolve(graph.render()).then(() => undefined), budget])
+  if (timer !== undefined) clearTimeout(timer)
+  stopRuntimeG6Layout(graph)
 }
 
 function preserveRuntimeG6Positions(
@@ -372,14 +591,16 @@ export async function syncRuntimeG6Data(
   graph: RuntimeG6GraphPort,
   data: RuntimeG6GraphData,
   previousTopology: string | undefined,
-): Promise<'render' | 'draw'> {
+  previousVisual: string | undefined,
+): Promise<'render' | 'draw' | 'data'> {
   const topology = runtimeG6TopologyKey(data)
   if (topology !== previousTopology) {
     graph.setData(data)
-    await graph.render()
+    await renderRuntimeG6WithBudget(graph)
     return 'render'
   }
   graph.setData(preserveRuntimeG6Positions(graph, data))
+  if (runtimeG6VisualKey(data) === previousVisual) return 'data'
   await graph.draw()
   return 'draw'
 }

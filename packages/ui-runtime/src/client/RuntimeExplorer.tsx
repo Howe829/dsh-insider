@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { ArrowLeftIcon, ChevronRightIcon, Squares2X2Icon } from '@heroicons/react/24/outline'
 import type {
-  RuntimeFiberPhase, RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation,
-  RuntimeTraceEvent, RuntimeTraceLane,
+  RuntimeFiberPhase, RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode,
+  RuntimeGraphServiceRelation, RuntimeGraphSnapshot, RuntimeTraceEvent, RuntimeTraceLane,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import {
   IconBranchOutline16, IconCloseOutline16, IconCordisPluginOutline14, IconDataOutline16, IconRefreshOutline16,
@@ -24,6 +24,8 @@ import type { RuntimeLocaleKey } from './locales.ts'
 import type { createRuntimeStore, RuntimeCategoryFilter, RuntimePhaseFilter } from './store.ts'
 import { filterRuntimeTrace, groupRuntimeTrace, type RuntimeTraceSession, type RuntimeTraceTurn } from './trace.ts'
 import css from './RuntimeExplorer.module.css'
+
+type RuntimeGraphFiberNode = RuntimeGraphSnapshot['fibers'][number]
 
 export type RuntimeExplorerProps =
   & PropsRuntime<'shell.overlay'>
@@ -46,6 +48,7 @@ const CATEGORY_LABELS = {
   session: 'categorySession',
   interface: 'categoryInterface',
   extension: 'categoryExtension',
+  fiber: 'fiberNode',
   service: 'serviceNode',
 } as const satisfies Record<Exclude<RuntimeCategoryFilter, 'all'>, RuntimeLocaleKey>
 
@@ -82,6 +85,14 @@ function includesService(service: RuntimeGraphServiceNode, query: string): boole
     .join('\n').toLowerCase().includes(query)
 }
 
+function includesFiber(fiber: RuntimeGraphFiberNode, query: string): boolean {
+  if (query === '') return true
+  return [
+    fiber.name, fiber.moduleName, fiber.id, fiber.ownerEntryId, fiber.parentFiberId,
+    ...fiber.provides, ...fiber.injects, ...fiber.missing,
+  ].filter(value => value !== undefined).join('\n').toLowerCase().includes(query)
+}
+
 function includesEvent(event: RuntimeTraceEvent, query: string): boolean {
   if (query === '') return true
   return [event.type, event.sessionId, event.name, event.callId, event.outcome]
@@ -111,7 +122,7 @@ function MetadataList({ values, empty }: { values: readonly string[]; empty: str
 }
 
 function GraphView({
-  nodes, allNodes, edges, allEdges, services, serviceRelations, totalNodes, totalServices,
+  nodes, allNodes, edges, allEdges, fibers, allFibers, services, serviceRelations, totalNodes, totalFibers, totalServices,
   graphFocus, focusLabel, onSelect, onClearSelection,
   categoryFilter, onCategoryFilterChange, empty, graphLabel, phaseLabel, profile, t,
 }: {
@@ -119,9 +130,12 @@ function GraphView({
   allNodes: readonly RuntimeGraphNode[]
   edges: readonly RuntimeGraphEdge[]
   allEdges: readonly RuntimeGraphEdge[]
+  fibers: readonly RuntimeGraphFiberNode[]
+  allFibers: readonly RuntimeGraphFiberNode[]
   services: readonly RuntimeGraphServiceNode[]
   serviceRelations: readonly RuntimeGraphServiceRelation[]
   totalNodes: number
+  totalFibers: number
   totalServices: number
   graphFocus: RuntimeG6Focus | undefined
   focusLabel: string | undefined
@@ -143,7 +157,11 @@ function GraphView({
   const [canvasRevision, setCanvasRevision] = useState(0)
   const layoutScopeKey = allNodes.map(node => node.logicalKey).sort().join('|')
   const selectedPluginId = graphFocus?.kind === 'plugin' ? graphFocus.id : undefined
+  const selectedFiberId = graphFocus?.kind === 'fiber' ? graphFocus.id : undefined
   const selectedServiceId = graphFocus?.kind === 'service' ? graphFocus.id : undefined
+  const selectedFiberOwnerId = selectedFiberId === undefined
+    ? undefined
+    : allFibers.find(fiber => fiber.id === selectedFiberId)?.ownerNodeId
   const selectedService = selectedServiceId === undefined
     ? undefined
     : services.find(service => service.id === selectedServiceId)
@@ -154,6 +172,12 @@ function GraphView({
     [selectedServiceId, serviceRelations],
   )
   const focus = useMemo(() => {
+    if (selectedFiberId !== undefined) {
+      const ownerNodes = selectedFiberOwnerId === undefined
+        ? []
+        : allNodes.filter(node => node.id === selectedFiberOwnerId)
+      return { nodes: ownerNodes, edges: [] }
+    }
     if (selectedService === undefined) {
       const sourceNodes = selectedPluginId === undefined ? nodes : allNodes
       const sourceEdges = selectedPluginId === undefined ? edges : allEdges
@@ -165,7 +189,23 @@ function GraphView({
     ])
     const relatedNodes = allNodes.filter(node => relatedIds.has(node.id))
     return { nodes: relatedNodes, edges: graphEdgesFor(relatedNodes, allEdges) }
-  }, [allEdges, allNodes, edges, neighbourDepth, nodes, selectedPluginId, selectedService, selectedServiceRelations])
+  }, [
+    allEdges, allNodes, edges, neighbourDepth, nodes, selectedFiberId, selectedFiberOwnerId,
+    selectedPluginId, selectedService, selectedServiceRelations,
+  ])
+  const visibleFibers = useMemo(() => {
+    if (selectedPluginId !== undefined) return allFibers.filter(fiber => fiber.ownerNodeId === selectedPluginId)
+    if (selectedFiberId !== undefined) {
+      const selected = allFibers.find(fiber => fiber.id === selectedFiberId)
+      return selected === undefined
+        ? []
+        : selected.ownerNodeId === undefined
+          ? [selected]
+          : allFibers.filter(fiber => fiber.ownerNodeId === selected.ownerNodeId)
+    }
+    if (categoryFilter === 'fiber') return fibers
+    return []
+  }, [allFibers, categoryFilter, fibers, selectedFiberId, selectedPluginId])
   const relations = useMemo(
     (): RuntimeGraphRelations => {
       if (selectedService === undefined) {
@@ -221,19 +261,28 @@ function GraphView({
     writeGraphLayout(profile, {}, 1)
     setCanvasRevision(current => current + 1)
   }
-  const filteredItemCount = categoryFilter === 'service' ? services.length : nodes.length
-  const totalItemCount = categoryFilter === 'service' ? totalServices : totalNodes
-  const hasVisibleItems = categoryFilter === 'service' ? services.length > 0 : focus.nodes.length > 0
+  const filteredItemCount = categoryFilter === 'service'
+    ? services.length
+    : categoryFilter === 'fiber' ? fibers.length : nodes.length
+  const totalItemCount = categoryFilter === 'service'
+    ? totalServices
+    : categoryFilter === 'fiber' ? totalFibers : totalNodes
+  const hasVisibleItems = categoryFilter === 'service'
+    ? services.length > 0
+    : categoryFilter === 'fiber' ? visibleFibers.length > 0 : focus.nodes.length > 0
   return (
     <div className={css.graphView}>
       {graphFocus !== undefined && focusLabel !== undefined && (
         <div className={css.focusBar} role="status" aria-live="polite">
           <span className={css.focusIdentity}>
-            <span>{t(graphFocus.kind === 'service' ? 'focusedService' : 'focusedNode')}</span>
+            <span>{t(graphFocus.kind === 'service'
+              ? 'focusedService'
+              : graphFocus.kind === 'fiber' ? 'focusedFiber' : 'focusedNode')}</span>
             <strong>{focusLabel}</strong>
           </span>
           <span className={css.focusCount}>{t('relatedPlugins')} <strong>{focus.nodes.length}</strong> / {totalNodes}</span>
           <span className={css.focusCount}>{t('relatedServices')} <strong>{visibleServiceCount}</strong> / {totalServices}</span>
+          <span className={css.focusCount}>{t('relatedFibers')} <strong>{visibleFibers.length}</strong> / {totalFibers}</span>
           {graphFocus.kind === 'plugin' && <label className={css.depthFilter}>
             <span>{t('relationDepth')}</span>
             <select
@@ -259,7 +308,7 @@ function GraphView({
             <strong>{t(CATEGORY_LABELS[categoryFilter])}</strong>
           </span>
           <span className={css.focusCount}>
-            {t('visiblePlugins')} <strong>{filteredItemCount}</strong> / {totalItemCount}
+            {t(categoryFilter === 'fiber' ? 'visibleFibers' : 'visiblePlugins')} <strong>{filteredItemCount}</strong> / {totalItemCount}
           </span>
           <button
             type="button"
@@ -272,9 +321,10 @@ function GraphView({
       )}
       {!hasVisibleItems ? <div className={css.emptyState}>{empty}</div> : (
         <RuntimeGraphCanvas
-          key={`${profile ?? 'unknown'}:${canvasRevision}:${categoryFilter}:${graphFocus?.kind ?? 'all'}:${graphFocus?.id ?? 'all'}`}
+          key={`${profile ?? 'unknown'}:${canvasRevision}`}
           nodes={focus.nodes}
           edges={focus.edges}
+          fibers={visibleFibers}
           services={services}
           serviceRelations={serviceRelations}
           relations={relations}
@@ -468,6 +518,55 @@ function PluginInspector({ node, t }: { node: RuntimeGraphNode; t: RuntimeExplor
   )
 }
 
+function FiberInspector({ fiber, t }: { fiber: RuntimeGraphFiberNode; t: RuntimeExplorerProps['t'] }) {
+  const lifecycle = statusKey(fiber.phase)
+  const lifecycleLabel = t(STATUS_LABELS[lifecycle])
+  const rows: Array<[RuntimeLocaleKey, string | number | undefined]> = [
+    ['fiberUid', fiber.uid],
+    ['fiber', fiber.id],
+    ['module', fiber.moduleName],
+    ['ownerPlugin', fiber.ownerEntryId],
+    ['parentFiber', fiber.parentFiberId],
+    ['runtimeIdentity', fiber.runtimeId],
+    ['entryRoot', t(fiber.entryRoot ? 'yes' : 'no')],
+  ]
+  return (
+    <>
+      <div className={css.inspectorTitle} data-kind="fiber">
+        <span className={css.inspectorIcon}><IconBranchOutline16 size={18} /></span>
+        <div>
+          <strong>#{fiber.uid} {fiber.name}</strong>
+          <span className={css.inspectorSubtitle}>
+            <small>{t('selectedFiber')}</small>
+            <span className={css.inspectorStatus} data-state={lifecycle} aria-label={`${t('status')}: ${lifecycleLabel}`}>
+              <i aria-hidden="true" />{lifecycleLabel}
+            </span>
+          </span>
+        </div>
+      </div>
+      <dl className={css.metadata}>
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt>{t(label)}</dt>
+            <dd>{value ?? <span className={css.emptyValue}>{t('unavailable')}</span>}</dd>
+          </div>
+        ))}
+      </dl>
+      {lifecycle === 'pending' && (
+        <section className={css.pendingDiagnosis} data-missing={fiber.missing.length > 0 || undefined}>
+          <h3>{t('pendingDiagnosis')}</h3>
+          <p>{t(fiber.missing.length > 0 ? 'waitingForServices' : 'waitingForRuntime')}</p>
+          {fiber.missing.length > 0 && <MetadataList values={fiber.missing} empty={t('noItems')} />}
+        </section>
+      )}
+      <section className={css.inspectorSection}><h3>{t('provides')}</h3><MetadataList values={fiber.provides} empty={t('noItems')} /></section>
+      <section className={css.inspectorSection}><h3>{t('injects')}</h3><MetadataList values={fiber.injects} empty={t('noItems')} /></section>
+      {fiber.missing.length > 0 && <section className={css.inspectorSection} data-warning><h3>{t('missing')}</h3><MetadataList values={fiber.missing} empty={t('noItems')} /></section>}
+      <section className={css.inspectorSection}><h3>{t('effects')} <span>{fiber.effectCount}</span></h3></section>
+    </>
+  )
+}
+
 function ServiceInspector({
   service, serviceRelations, nodes, t,
 }: {
@@ -582,40 +681,68 @@ export function RuntimeExplorer({
       actions.selectTraceTurn(undefined)
       return
     }
-    if (state.selection?.kind === 'node' && !data.graph.nodes.some(node => node.id === state.selection?.id)) {
-      actions.select(undefined)
-    } else if (state.selection?.kind === 'service' && !data.graph.services.some(service => service.id === state.selection?.id)) {
-      actions.select(undefined)
-    } else if (state.selection?.kind === 'event' && !data.trace.some(event => event.id === state.selection?.id)) {
-      actions.select(undefined)
-    }
+    const selectionExists = state.selection === undefined
+      || (state.selection.kind === 'node' && data.graph.nodes.some(node => node.id === state.selection?.id))
+      || (state.selection.kind === 'fiber' && data.graph.fibers.some(fiber => fiber.id === state.selection?.id))
+      || (state.selection.kind === 'service' && data.graph.services.some(service => service.id === state.selection?.id))
+      || (state.selection.kind === 'event' && data.trace.some(event => event.id === state.selection?.id))
+    if (!selectionExists) actions.select(undefined)
     if (state.traceTurnKey !== undefined && !traceSessions.some(session => (
       session.turns.some(turn => turn.key === state.traceTurnKey)
     ))) {
       actions.selectTraceTurn(undefined)
     }
   }, [actions, data, state.open, state.selection, state.traceTurnKey, traceSessions])
-  if (!state.open) return null
-
-  const graphNodes = state.category === 'service' ? [] : data?.graph.nodes.filter(node => (
-    includesNode(node, query)
-    && (state.phase === 'all' || statusKey(node.phase) === state.phase)
-    && (state.category === 'all' || runtimeG6NodeCategory(node.moduleName, node.label) === state.category)
-  )) ?? []
-  const graphServices = data === undefined
-    ? []
-    : state.category === 'service'
-      ? data.graph.services.filter(service => (
+  const graphFibers = useMemo(
+    () => data?.graph.fibers.filter(fiber => (
+      includesFiber(fiber, query)
+      && (state.phase === 'all' || statusKey(fiber.phase) === state.phase)
+      && (state.fiberCategory === 'all'
+        || runtimeG6NodeCategory(fiber.moduleName, fiber.name) === state.fiberCategory)
+    )) ?? [],
+    [data?.graph.fibers, query, state.fiberCategory, state.phase],
+  )
+  const fiberOwnerIds = useMemo(
+    () => new Set(graphFibers.flatMap(fiber => fiber.ownerNodeId === undefined ? [] : [fiber.ownerNodeId])),
+    [graphFibers],
+  )
+  const graphNodes = useMemo(
+    () => state.category === 'service'
+      ? []
+      : state.category === 'fiber'
+        ? data?.graph.nodes.filter(node => fiberOwnerIds.has(node.id)) ?? []
+        : data?.graph.nodes.filter(node => (
+          includesNode(node, query)
+          && (state.phase === 'all' || statusKey(node.phase) === state.phase)
+          && (state.category === 'all' || runtimeG6NodeCategory(node.moduleName, node.label) === state.category)
+        )) ?? [],
+    [data?.graph.nodes, fiberOwnerIds, query, state.category, state.phase],
+  )
+  const graphServices = useMemo(
+    () => data === undefined
+      ? []
+      : state.category === 'service'
+        ? data.graph.services.filter(service => (
           includesService(service, query)
           && (state.phase === 'all' || statusKey(service.phase) === state.phase)
         ))
-      : data.graph.services
-  const graphEdges = data === undefined ? [] : graphEdgesFor(graphNodes, data.graph.edges)
+        : data.graph.services,
+    [data?.graph.services, query, state.category, state.phase],
+  )
+  const graphEdges = useMemo(
+    () => data === undefined ? [] : graphEdgesFor(graphNodes, data.graph.edges),
+    [data?.graph.edges, graphNodes],
+  )
+  if (!state.open) return null
+
   const selectedTurn = traceSessions.flatMap(session => session.turns)
     .find(turn => turn.key === state.traceTurnKey)
   const traceEvents = selectedTurn?.events.filter(event => includesEvent(event, query)) ?? []
   const selectedNode = state.selection?.kind === 'node'
     ? data?.graph.nodes.find(node => node.id === state.selection?.id)
+    : undefined
+  const selectedFiber = state.selection?.kind === 'fiber'
+    ? data?.graph.fibers.find(fiber => fiber.id === state.selection?.id)
     : undefined
   const selectedService = state.selection?.kind === 'service'
     ? data?.graph.services.find(service => service.id === state.selection?.id)
@@ -696,7 +823,7 @@ export function RuntimeExplorer({
         )}
       </div>
       <div className={clsx(css.body, (
-        selectedNode !== undefined || selectedService !== undefined || selectedEvent !== undefined
+        selectedNode !== undefined || selectedFiber !== undefined || selectedService !== undefined || selectedEvent !== undefined
       ) && css.withInspector)}>
         <main className={css.canvas}>
           {remote.loading && data === undefined && <div className={css.emptyState}>{t('loadingSnapshot')}</div>}
@@ -708,10 +835,17 @@ export function RuntimeExplorer({
               overview={data.overview}
               activity={data.effectActivity}
               t={t}
-              onInspect={(category, status) => {
+              onInspect={(kind, category, status) => {
                 actions.setTab('graph')
                 actions.setPhase(status)
-                actions.setCategory(category ?? 'all')
+                if (kind === 'fiber') {
+                  actions.setCategory('fiber')
+                  actions.setFiberCategory(category ?? 'all')
+                } else if (kind === 'service') {
+                  actions.setCategory('service')
+                } else {
+                  actions.setCategory(category ?? 'all')
+                }
               }}
             />
           )}
@@ -721,14 +855,21 @@ export function RuntimeExplorer({
               allNodes={data.graph.nodes}
               edges={graphEdges}
               allEdges={data.graph.edges}
+              fibers={graphFibers}
+              allFibers={data.graph.fibers}
               services={graphServices}
               serviceRelations={data.graph.serviceRelations}
               totalNodes={data.graph.nodes.length}
+              totalFibers={data.graph.fibers.length}
               totalServices={data.overview.serviceBreakdown.total}
               graphFocus={selectedNode === undefined
-                ? selectedService === undefined ? undefined : { kind: 'service', id: selectedService.id }
+                ? selectedFiber === undefined
+                  ? selectedService === undefined ? undefined : { kind: 'service', id: selectedService.id }
+                  : { kind: 'fiber', id: selectedFiber.id }
                 : { kind: 'plugin', id: selectedNode.id }}
-              focusLabel={selectedNode?.label ?? selectedService?.name}
+              focusLabel={selectedNode?.label ?? (selectedFiber === undefined
+                ? selectedService?.name
+                : `#${selectedFiber.uid} ${selectedFiber.name}`)}
               profile={data.profile}
               empty={t('emptyGraph')}
               graphLabel={t('graphLabel')}
@@ -736,7 +877,10 @@ export function RuntimeExplorer({
               categoryFilter={state.category}
               t={t}
               onSelect={(focus) => {
-                actions.select({ kind: focus.kind === 'plugin' ? 'node' : 'service', id: focus.id })
+                actions.select({
+                  kind: focus.kind === 'plugin' ? 'node' : focus.kind,
+                  id: focus.id,
+                })
               }}
               onClearSelection={() => { actions.select(undefined) }}
               onCategoryFilterChange={(category) => { actions.setCategory(category) }}
@@ -763,12 +907,13 @@ export function RuntimeExplorer({
               />
           )}
         </main>
-        {(selectedNode !== undefined || selectedService !== undefined || selectedEvent !== undefined) && (
+        {(selectedNode !== undefined || selectedFiber !== undefined || selectedService !== undefined || selectedEvent !== undefined) && (
           <aside className={css.inspector}>
             <button type="button" className={css.inspectorClose} aria-label={t('closeInspector')} onClick={() => { actions.select(undefined) }}>
               <IconCloseOutline16 size={16} />
             </button>
             {selectedNode !== undefined && <PluginInspector node={selectedNode} t={t} />}
+            {selectedFiber !== undefined && <FiberInspector fiber={selectedFiber} t={t} />}
             {selectedService !== undefined && <ServiceInspector
               service={selectedService}
               serviceRelations={data?.graph.serviceRelations ?? []}

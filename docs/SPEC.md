@@ -61,7 +61,7 @@ The product maps Cordis concepts as follows:
 | Cordis concept | Product representation |
 | --- | --- |
 | Plugin definition | Node name and module metadata |
-| Fiber | Identity of one live plugin runtime instance |
+| Fiber | On-demand node for one live plugin runtime instance |
 | Service | Label and semantics of an injection relationship |
 | `inject` | Consumer-to-provider dependency edge |
 | `ctx.plugin(child)` | Owner-to-child `mounts` edge |
@@ -78,7 +78,10 @@ events must not be promoted into graph nodes by default.
 
 ### 5.1 Primary node
 
-The default graph contains plugin Fiber nodes.
+The default graph contains Loader-entry plugin nodes. Fiber instances are
+projected as separate nodes only when a plugin is selected, a Fiber is selected,
+or the user enters a Fiber status/category view. This keeps the ordinary graph
+readable while preserving exact runtime-instance diagnosis.
 
 ```ts
 interface RuntimePluginNode {
@@ -111,7 +114,8 @@ layout. `fiberId` identifies the current runtime instance and must not be reused
 for a replacement Fiber.
 
 Multiple Fibers created from the same plugin definition must be representable as
-separate nodes.
+separate nodes. Each Fiber node retains its owner Loader entry, optional parent
+Fiber, lifecycle state, services, missing injections, and Effect count.
 
 ### 5.2 Product-facing status
 
@@ -648,7 +652,8 @@ The MVP is an evolution of the current implementation, not a rewrite.
 ### Required
 
 1. Existing Runtime Graph and Request Trace remain functional.
-2. Plugin/Fiber nodes are the primary graph entities.
+2. Plugin nodes are the default graph entities; Fiber nodes are first-class,
+   on-demand diagnostic entities.
 3. Injected services are represented as consumer-to-provider edges.
 4. Parent-child ownership is represented as `mounts` when evidence is available.
 5. The four product-facing states are used consistently in summary, graph, and
@@ -667,7 +672,6 @@ The MVP is an evolution of the current implementation, not a rewrite.
 
 ### After MVP
 
-- complete enumeration of non-Loader child Fibers;
 - scope clusters and scope filtering;
 - optional Service expansion layer;
 - dedicated Runtime Tree derived from the same Fiber model;

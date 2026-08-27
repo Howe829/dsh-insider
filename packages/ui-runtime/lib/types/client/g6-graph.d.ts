@@ -1,11 +1,12 @@
 /** Pure G6 projection and update policy for the Runtime Explorer graph canvas. */
 import type { EdgeData, GraphData, NodeData } from '@antv/g6';
-import type { RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation } from '@deepseek-ai/dsh-api-remotes/client';
+import type { RuntimeGraphEdge, RuntimeGraphNode, RuntimeGraphServiceNode, RuntimeGraphServiceRelation, RuntimeGraphSnapshot } from '@deepseek-ai/dsh-api-remotes/client';
 import type { RuntimeGraphRelations, RuntimeGraphSavedPositions } from './graph.ts';
 import { runtimeLifecycleStatus } from './graph.ts';
-export type RuntimeG6NodeKind = 'plugin' | 'service' | 'missing-service';
+type RuntimeGraphFiberNode = RuntimeGraphSnapshot['fibers'][number];
+export type RuntimeG6NodeKind = 'plugin' | 'fiber' | 'service' | 'missing-service';
 /** Visual role inferred from the plugin package name and its runtime label. */
-export type RuntimeG6NodeCategory = 'core' | 'agent' | 'model' | 'tool' | 'session' | 'interface' | 'extension' | 'service' | 'missing';
+export type RuntimeG6NodeCategory = 'core' | 'agent' | 'model' | 'tool' | 'session' | 'interface' | 'extension' | 'fiber' | 'service' | 'missing';
 export interface RuntimeG6NodeMetadata {
     readonly kind: RuntimeG6NodeKind;
     readonly label: string;
@@ -23,11 +24,16 @@ export interface RuntimeG6NodeMetadata {
     readonly service?: string;
     readonly providerNodeId?: string;
     readonly providerEntryId?: string;
+    readonly ownerNodeId?: string;
+    readonly ownerEntryId?: string;
+    readonly parentFiberId?: string;
+    readonly fiberUid?: number;
+    readonly entryRoot?: boolean;
     readonly consumerCount?: number;
     readonly order?: number;
 }
 export interface RuntimeG6EdgeMetadata {
-    readonly kind: 'injects' | 'provides' | 'missing';
+    readonly kind: 'injects' | 'provides' | 'owns' | 'parent' | 'missing';
     readonly relation?: string;
     readonly services: readonly string[];
 }
@@ -35,26 +41,42 @@ export interface RuntimeG6GraphData extends GraphData {
     readonly nodes: NodeData[];
     readonly edges: EdgeData[];
 }
-/** The graph focus can be either a Loader plugin or one exact scoped Service implementation. */
+/** The graph focus can be a Loader plugin, Fiber instance, or exact scoped Service implementation. */
 export type RuntimeG6Focus = {
     readonly kind: 'plugin';
+    readonly id: string;
+} | {
+    readonly kind: 'fiber';
     readonly id: string;
 } | {
     readonly kind: 'service';
     readonly id: string;
 };
 export declare const RUNTIME_G6_COLLISION_GAP = 24;
+export declare const RUNTIME_G6_INITIAL_SPACING: number;
+/**
+ * Give the force simulation a deterministic, non-overlapping starting point.
+ * G6 otherwise initializes many newly materialized Fiber nodes at the same
+ * coordinate, and the bounded layout budget can expire before they separate.
+ */
+export declare function seedRuntimeG6Positions(nodes: readonly NodeData[]): NodeData[];
 /**
  * Infer a stable, explainable visual category from DSH package conventions.
  * The fallback deliberately stays neutral for third-party plugins.
  */
-export declare function runtimeG6NodeCategory(moduleName: string, label: string): Exclude<RuntimeG6NodeCategory, 'service' | 'missing'>;
+export declare function runtimeG6NodeCategory(moduleName: string, label: string): Exclude<RuntimeG6NodeCategory, 'fiber' | 'service' | 'missing'>;
 /** Keep the exact plugin name while preferring semantic line breaks inside circles. */
 export declare function runtimeG6DisplayLabel(label: string, maxLineLength?: number): string;
 /** Scale hubs without allowing high-degree plugins to dominate the canvas. */
 export declare function runtimeG6NodeSize(degree: number, selected?: boolean, label?: string): number;
 /** Collision radius passed to G6, including label-safe whitespace around each circle. */
 export declare function runtimeG6CollisionRadius(size: number): number;
+/**
+ * Move only the node the user released until it clears its visible neighbours.
+ * This deliberately does not restart the force layout: manually placed nodes
+ * stay where the user put them, while the released node cannot cover a peer.
+ */
+export declare function resolveRuntimeG6DraggedNodePosition(draggedId: string, target: ArrayLike<number>, nodes: readonly NodeData[], positions: ReadonlyMap<string, ArrayLike<number>>): readonly [number, number];
 /** Safely read the metadata placed on a G6 node datum by this adapter. */
 export declare function runtimeG6NodeMetadata(node: NodeData): RuntimeG6NodeMetadata;
 /** Safely read the metadata placed on a G6 edge datum by this adapter. */
@@ -63,19 +85,28 @@ export declare function runtimeG6EdgeMetadata(edge: EdgeData): RuntimeG6EdgeMeta
  * Project the Host graph into G6 data while keeping product state out of the renderer.
  * Missing Cordis providers become explicit satellite nodes only around the selected plugin.
  */
-export declare function buildRuntimeG6Data(nodes: readonly RuntimeGraphNode[], edges: readonly RuntimeGraphEdge[], services: readonly RuntimeGraphServiceNode[], serviceRelations: readonly RuntimeGraphServiceRelation[], relations: RuntimeGraphRelations, focus: RuntimeG6Focus | undefined, savedPositions: RuntimeGraphSavedPositions, showAllServices?: boolean): RuntimeG6GraphData;
+export declare function buildRuntimeG6Data(nodes: readonly RuntimeGraphNode[], edges: readonly RuntimeGraphEdge[], fibers: readonly RuntimeGraphFiberNode[], services: readonly RuntimeGraphServiceNode[], serviceRelations: readonly RuntimeGraphServiceRelation[], relations: RuntimeGraphRelations, focus: RuntimeG6Focus | undefined, savedPositions: RuntimeGraphSavedPositions, showAllServices?: boolean): RuntimeG6GraphData;
 /** Count concrete scoped Service nodes currently materialized in focus mode. */
 export declare function runtimeG6VisibleServiceCount(data: RuntimeG6GraphData): number;
 /** Topology identity used to distinguish live status refreshes from structural changes. */
 export declare function runtimeG6TopologyKey(data: RuntimeG6GraphData): string;
+/** Renderer-visible identity; tooltip-only metadata does not require a canvas redraw. */
+export declare function runtimeG6VisualKey(data: RuntimeG6GraphData): string;
 export interface RuntimeG6GraphPort {
     setData: (data: GraphData) => void;
     render: () => unknown | Promise<unknown>;
     draw: () => unknown | Promise<unknown>;
+    stopLayout?: () => void;
     getElementPosition?: (id: string) => ArrayLike<number>;
 }
+export declare const RUNTIME_G6_LAYOUT_BUDGET_MS = 800;
+/** G6 releases a completed layout before its public stop hook becomes a no-op. */
+export declare function stopRuntimeG6Layout(graph: RuntimeG6GraphPort): void;
+/** Bound a force layout even when the renderer's completion promise never settles. */
+export declare function renderRuntimeG6WithBudget(graph: RuntimeG6GraphPort): Promise<void>;
 /**
  * Structural changes run layout; lifecycle-only refreshes draw in place so the viewport never jumps.
  */
-export declare function syncRuntimeG6Data(graph: RuntimeG6GraphPort, data: RuntimeG6GraphData, previousTopology: string | undefined): Promise<'render' | 'draw'>;
+export declare function syncRuntimeG6Data(graph: RuntimeG6GraphPort, data: RuntimeG6GraphData, previousTopology: string | undefined, previousVisual: string | undefined): Promise<'render' | 'draw' | 'data'>;
+export {};
 //# sourceMappingURL=g6-graph.d.ts.map

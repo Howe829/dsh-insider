@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Read-only Host gateway for DSH Insider. `RuntimeExplorerGateway` registers the `runtimeExplorer` service and publishes the direct Remote `runtimeExplorer/snapshot`. Each snapshot carries the exact profile published by the CLI launcher or Desktop profile service and projects the current Cordis Loader entries into plugin nodes, their root Fiber phases, the services they provide and inject, unresolved injections, bounded effect labels, and service-derived dependency edges. A Host that provides neither fact reports `null`; the gateway never guesses one from files or process arguments.
+Read-only Host gateway for DSH Insider. `RuntimeExplorerGateway` registers the `runtimeExplorer` service and publishes the direct Remote `runtimeExplorer/snapshot`. Each snapshot carries the exact profile published by the CLI launcher or Desktop profile service and projects the current Cordis Loader entries into plugin nodes while also enumerating their root and non-Loader child Fibers. Fiber records include instance uid, owning Loader entry, observable parent Fiber, phase, provided and injected services, unresolved injections, and Effect count; plugin records continue to expose service relationships and bounded Effect activity. A Host that provides neither fact reports `null`; the gateway never guesses one from files or process arguments.
 
 The gateway also observes `session/event` and retains a bounded ring of correlation metadata for the request trace. A row can contain the event type, time, sequence, session id, turn, step, call id, tool name, outcome, and serialized payload character count. It never retains or returns prompt text, model output, tool arguments, or tool result content. Loader, Fiber, and Session remain the lifecycle authorities; this package only projects their live state.
 
@@ -29,7 +29,7 @@ None; it never assembles model input.
 
 ## Known Limitations and Deferred Work
 
-- The graph is a point-in-time projection of Loader-owned root Fibers and Cordis service ownership. It has no durable history and does not infer dependencies that bypass Cordis injection.
+- The graph is a point-in-time projection of Loader entries, currently enumerable Fibers, and Cordis service ownership. It has no durable history and does not infer dependencies that bypass Cordis injection or parent-child relationships that are not observable.
 - The trace begins when this Host plugin activates, is process-local, and evicts older rows at `traceLimit`.
 - Effect lifecycle history also begins at activation and is not persisted. Effects without a Loader owner are excluded from per-plugin activity, and transition overflow is reported instead of silently claiming a complete window.
 - `payloadChars` is a diagnostic size indicator computed before the payload is discarded; it is not a byte count.

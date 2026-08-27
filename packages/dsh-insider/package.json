@@ -1,6 +1,6 @@
 {
   "name": "@howardchan/dsh-insider",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "DSH Insider: an independent Runtime Explorer for DeepSeek Harness and Cordis",
   "keywords": [
     "deepseek",

@@ -50,8 +50,8 @@ const DEFAULT_ACTIVITY_TRANSITION_LIMIT = 4096;
 const RUNTIME_PROCESS_STATE = Symbol.for("@deepseek-ai/dsh-runtime/process-state");
 const LEGACY_PUBLIC_RUNTIME_PROCESS_STATE = Symbol.for("@howardchan/dsh-runtime/process-state");
 const CAPABILITIES = {
-	fiberInstances: false,
-	ownershipEdges: false,
+	fiberInstances: true,
+	ownershipEdges: true,
 	scopes: false,
 	lifecycleTransitions: true,
 	turnPluginAttribution: false,
@@ -301,9 +301,14 @@ function isErrorEvent(event) {
 function projectRuntimeGraph(ctx, effectLimit) {
 	const processState = runtimeProcessState(ctx);
 	const implementations = liveImplementations(ctx);
+	const liveFibers = [...ctx.registry.values()].flatMap((runtime) => [...runtime.fibers]);
 	const implementationByIdentity = new Map(implementations.map((implementation) => [ctx.reflect.store[implementation.key], implementation]));
 	const providedByEntry = /* @__PURE__ */ new Map();
+	const providedByFiber = /* @__PURE__ */ new Map();
 	for (const impl of implementations) {
+		const fiberServices = providedByFiber.get(impl.fiber) ?? [];
+		fiberServices.push(impl.name);
+		providedByFiber.set(impl.fiber, fiberServices);
 		const entryId = owningEntryId(impl.fiber);
 		if (entryId === void 0) continue;
 		const services = providedByEntry.get(entryId) ?? [];
@@ -329,7 +334,8 @@ function projectRuntimeGraph(ctx, effectLimit) {
 	const serviceById = new Map(services.map((service) => [service.id, service]));
 	const serviceIdByImplementation = new Map([...implementationByIdentity].flatMap(([identity, implementation]) => identity === void 0 ? [] : [[identity, serviceRuntimeId(processState, implementation.key)]]));
 	const edgeServices = /* @__PURE__ */ new Map();
-	for (const entry of ctx.loader.entries()) {
+	const loaderEntries = [...ctx.loader.entries()];
+	for (const entry of loaderEntries) {
 		if (entry.options.group) continue;
 		const fiber = entry.fiber;
 		const injects = fiber === void 0 ? [] : Object.keys(fiber.inject);
@@ -390,6 +396,34 @@ function projectRuntimeGraph(ctx, effectLimit) {
 			target: edge.target,
 			services: edge.services.sort()
 		})),
+		fibers: liveFibers.flatMap((fiber) => {
+			if (fiber.uid === null) return [];
+			const ownerEntryId = owningEntryId(fiber);
+			const ownerNodeId = ownerEntryId === void 0 ? void 0 : entryNodeId(ownerEntryId);
+			const parentFiber = fiber.parent.fiber;
+			const parentFiberId = parentFiber.runtime === null || parentFiber.uid === null ? void 0 : `${processState.bootId}:${parentFiber.uid}`;
+			const injects = Object.keys(fiber.inject).sort();
+			const missing = injects.filter((service) => fiber.ctx.reflect._getImpl(service, false) === void 0);
+			const runtimeId = pluginRuntimeId(processState, fiber.runtime);
+			const moduleName = fiber.entry?.options.name ?? fiber.runtime?.name ?? fiber.name;
+			const id = `${processState.bootId}:${fiber.uid}`;
+			return [{
+				id,
+				uid: fiber.uid,
+				name: fiber.name,
+				moduleName,
+				...runtimeId === void 0 ? {} : { runtimeId },
+				...ownerNodeId === void 0 ? {} : { ownerNodeId },
+				...ownerEntryId === void 0 ? {} : { ownerEntryId },
+				...parentFiberId === void 0 ? {} : { parentFiberId },
+				entryRoot: nodes.some((node) => node.id === ownerNodeId && node.fiberId === id),
+				phase: FIBER_PHASE[fiber.state],
+				provides: [...providedByFiber.get(fiber) ?? []].sort(),
+				injects,
+				missing,
+				effectCount: effectCount(fiber.getEffects())
+			}];
+		}).sort((left, right) => left.uid - right.uid),
 		services: services.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
 		serviceRelations: serviceRelations.sort((left, right) => left.id.localeCompare(right.id))
 	};
@@ -647,7 +681,7 @@ let RuntimeExplorerGateway = (() => {
 			const graph = projectRuntimeGraph(this.ctx, this.resolved.effectLimit);
 			const observedAt = Date.now();
 			return {
-				schemaVersion: 5,
+				schemaVersion: 6,
 				bootId: processState.bootId,
 				snapshotSeq: ++processState.snapshotSeq,
 				profile: runtimeProfile(this.ctx),

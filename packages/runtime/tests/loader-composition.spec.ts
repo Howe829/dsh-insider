@@ -104,7 +104,7 @@ describe('DSH Insider real Loader composition', () => {
     const runtime = ctx.get('runtimeExplorer') as RuntimeExplorerGateway
     const first = runtime.snapshot()
     expect(first).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       bootId: expect.any(String),
       snapshotSeq: 1,
       capabilities: { payloadCapture: false },

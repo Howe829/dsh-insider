@@ -1,6 +1,6 @@
 {
   "name": "dsh-insider-workspace",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "private": true,
   "description": "Standalone source repository for the DSH Insider Runtime Explorer plugin",
   "license": "MIT",

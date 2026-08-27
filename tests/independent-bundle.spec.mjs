@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { load } from 'js-yaml'
 
 const root = resolve(import.meta.dirname, '..')
@@ -37,12 +38,17 @@ test('client bundle registers itself and mounts its Remote contribution', async 
   assert.match(client, /style\.setProperty\("flex-direction", "column"\)/)
   assert.match(client, /footer\.boundary\.getBoundingClientRect\(\)/)
   assert.match(client, /footer\.restore\(\)/)
+  assert.match(client, /#4ade80/)
+  assert.match(client, /#5eead4/)
+  assert.doesNotMatch(client, /#6ee7b7/)
   assert.doesNotMatch(client, /@deepseek-ai\/dsh-client-ui-runtime/)
   assert.doesNotMatch(client, /@deepseek-ai\/dsh-runtime/)
 })
 
 test('Host and generated Remote artifacts share the public package identity', async () => {
   const host = await text('lib/index.js')
+  const hostTypert = await text('lib/typert.host.js')
+  const client = await text('lib/client.js')
   const remote = await text('lib/typert.remote-client.js')
   const remoteTypes = await text('lib/typert.remote-client.d.ts')
 
@@ -51,4 +57,52 @@ test('Host and generated Remote artifacts share the public package identity', as
   assert.match(remote, /package: '@howardchan\/dsh-insider'/)
   assert.match(remote, /@howardchan\/dsh-insider#runtimeExplorer\/snapshot/)
   assert.match(remoteTypes, /from '@howardchan\/dsh-insider\/types'/)
+  assert.match(hostTypert, /'schemaVersion': z\.literal\(6\)/)
+  assert.match(hostTypert, /'fibers': z\.array\(z\.object\(/)
+  assert.match(remote, /'schemaVersion': z\.literal\(6\)/)
+  assert.match(remote, /'fibers': z\.array\(z\.object\(/)
+  assert.match(client, /"schemaVersion": literal\(6\)/)
+  assert.match(client, /"fibers": array\(object\(/)
+})
+
+test('generated transport schema accepts the Fiber-aware snapshot contract', async () => {
+  const { TYPERT } = await import(pathToFileURL(resolve(root, 'packages/runtime/lib/typert.host.js')))
+  const schema = TYPERT.invocations[0].result.schema
+  const statuses = { pending: 1, active: 0, disposed: 0, failed: 0 }
+  const emptyCollection = { total: 0, statuses: { pending: 0, active: 0, disposed: 0, failed: 0 }, byType: [] }
+  const result = schema.safeParse({
+    schemaVersion: 6,
+    bootId: 'boot',
+    snapshotSeq: 1,
+    profile: 'desktop',
+    observedAt: 1,
+    refreshIntervalMs: 1000,
+    overview: {
+      status: 'running', uptimeMs: 1, contexts: 2, plugins: 1, fibers: 1, turns: 0,
+      active: 0, effects: 0, events: 0, errors: 0,
+      loaderBreakdown: emptyCollection,
+      fiberBreakdown: { total: 1, statuses, byType: [] },
+      serviceBreakdown: { ...emptyCollection, implementations: 0 },
+    },
+    effectActivity: {
+      windowMs: 300000, availableSince: 1, complete: true, droppedTransitions: 0,
+      current: 0, created: 0, disposed: 0, delta: 0, churn: 0, plugins: [], recent: [],
+    },
+    graph: {
+      nodes: [], edges: [], services: [], serviceRelations: [],
+      fibers: [{
+        id: 'boot:41', uid: 41, name: 'nested-tools', moduleName: '@fixture/nested-tools',
+        ownerNodeId: 'provider', ownerEntryId: 'provider-entry', parentFiberId: 'boot:40',
+        entryRoot: false, phase: 'pending', provides: [], injects: ['tools'], missing: ['tools'], effectCount: 0,
+      }],
+    },
+    trace: [],
+    capabilities: {
+      fiberInstances: true, ownershipEdges: true, scopes: false, lifecycleTransitions: true,
+      turnPluginAttribution: false, eventDispatch: 'none', payloadCapture: false,
+    },
+    limits: { transitionLimit: 4096, traceEventLimit: 256 },
+  })
+
+  assert.equal(result.success, true, result.success ? undefined : result.error.message)
 })

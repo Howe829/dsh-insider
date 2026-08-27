@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-“DSH 洞察”的只读 Host 网关。`RuntimeExplorerGateway` 注册 `runtimeExplorer` 服务，并发布直接 Remote `runtimeExplorer/snapshot`。每份快照都会携带 CLI 启动器或 Desktop profile 服务精确发布的 profile，并将当前 Cordis Loader 条目投影为插件节点，包含根 Fiber 阶段、提供与注入的服务、未满足的注入、有上限的 effect 标签，以及由服务所有关系派生的依赖边。两种宿主事实均不存在时返回 `null`；网关不会从文件或进程参数中猜测。
+“DSH 洞察”的只读 Host 网关。`RuntimeExplorerGateway` 注册 `runtimeExplorer` 服务，并发布直接 Remote `runtimeExplorer/snapshot`。每份快照都会携带 CLI 启动器或 Desktop profile 服务精确发布的 profile，并将当前 Cordis Loader 条目投影为插件节点，同时枚举其根 Fiber 与非 Loader 子 Fiber。Fiber 投影包含实例 uid、归属 Loader 条目、可观测的父 Fiber、阶段、提供与注入的服务、未满足的注入及 Effect 数量；插件投影继续提供服务关系和有界 Effect 活动。两种宿主事实均不存在时返回 `null`；网关不会从文件或进程参数中猜测。
 
 网关还会观察 `session/event`，用有界环形窗口保留请求追踪所需的关联元数据。一条记录可包含事件类型、时间、序号、会话 id、turn、step、call id、工具名、结果与序列化 payload 的字符数。它不会保留或返回提示词、模型输出、工具参数或工具结果内容。Loader、Fiber 和 Session 仍是生命周期权威；本包只投影它们的实时状态。
 
@@ -29,7 +29,7 @@ Cordis Effect 生命周期通知会进入另一个有界窗口。网关把 Effec
 
 ## 已知限制与暂缓事项
 
-- 依赖图是 Loader 所有的根 Fiber 与 Cordis 服务归属的当下投影。它不保留持久历史，也不推断绕过 Cordis 注入的依赖。
+- 依赖图是 Loader 条目、当前可枚举 Fiber 与 Cordis 服务归属的当下投影。它不保留持久历史，也不推断绕过 Cordis 注入的依赖或不可观测的父子关系。
 - 追踪从这个 Host 插件激活时开始，只存在于当前进程，并会在超过 `traceLimit` 时驱逐旧记录。
 - Effect 生命周期历史同样从激活时开始且不持久化。无法归属到 Loader 的 Effect 不进入插件活动表；记录溢出会被明确报告，而不会静默宣称窗口完整。
 - `payloadChars` 是在丢弃 payload 之前计算的诊断性大小指标，不是字节数。

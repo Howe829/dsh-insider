@@ -2,7 +2,7 @@
   "name": "@deepseek-ai/dsh-client-ui-runtime",
   "private": true,
   "description": "dsh-insider dependency graph and request trace browser surface",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

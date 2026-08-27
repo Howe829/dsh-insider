@@ -1,5 +1,6 @@
 /** Shared viewing state for the sidebar action and frame overlay. */
 import { type EngineStoreHandle } from '@deepseek-ai/dsh-client-runtime/client';
+import type { RuntimePluginCategory } from '@deepseek-ai/dsh-api-remotes/client';
 import type { RuntimeLifecycleStatus } from './graph.ts';
 import type { RuntimeG6NodeCategory } from './g6-graph.ts';
 /** Explorer tab selected by the user. */
@@ -10,7 +11,7 @@ export type RuntimePhaseFilter = RuntimeLifecycleStatus | 'all';
 export type RuntimeCategoryFilter = Exclude<RuntimeG6NodeCategory, 'missing'> | 'all';
 /** Current plugin, exact scoped Service implementation, or trace-event inspector selection. */
 export type RuntimeSelection = {
-    kind: 'node' | 'service' | 'event';
+    kind: 'node' | 'fiber' | 'service' | 'event';
     id: string;
 };
 /** Root-scoped view state shared by the sidebar action and overlay. */
@@ -20,6 +21,7 @@ export interface RuntimeStoreState {
     query: string;
     phase: RuntimePhaseFilter;
     category: RuntimeCategoryFilter;
+    fiberCategory: RuntimePluginCategory | 'all';
     selection: RuntimeSelection | undefined;
     traceTurnKey: string | undefined;
     sidebarOffset: number;
@@ -30,6 +32,7 @@ type RuntimeStoreActions = {
     setQuery: (draft: RuntimeStoreState, query: string) => void;
     setPhase: (draft: RuntimeStoreState, phase: RuntimePhaseFilter) => void;
     setCategory: (draft: RuntimeStoreState, category: RuntimeCategoryFilter) => void;
+    setFiberCategory: (draft: RuntimeStoreState, category: RuntimePluginCategory | 'all') => void;
     select: (draft: RuntimeStoreState, selection?: RuntimeSelection) => void;
     selectTraceTurn: (draft: RuntimeStoreState, key?: string) => void;
     setSidebarOffset: (draft: RuntimeStoreState, px: number) => void;

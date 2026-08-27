@@ -14,7 +14,7 @@ import { apply as applyNode } from '../src/index.ts'
 afterEach(cleanup)
 
 const SNAPSHOT = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   bootId: 'fixture-boot',
   snapshotSeq: 1,
   profile: 'fixture-web',
@@ -35,11 +35,11 @@ const SNAPSHOT = {
     windowMs: 300_000, availableSince: 1, complete: true, droppedTransitions: 0,
     current: 0, created: 0, disposed: 0, delta: 0, churn: 0, plugins: [], recent: [],
   },
-  graph: { nodes: [], edges: [], services: [], serviceRelations: [] },
+  graph: { nodes: [], edges: [], fibers: [], services: [], serviceRelations: [] },
   trace: [],
   capabilities: {
-    fiberInstances: false,
-    ownershipEdges: false,
+    fiberInstances: true,
+    ownershipEdges: true,
     scopes: false,
     lifecycleTransitions: true,
     turnPluginAttribution: false,

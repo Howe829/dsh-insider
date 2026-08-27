@@ -24,13 +24,16 @@ status and plugin type.
 
 ### Relationship graph
 
-The graph visualizes DSH plugins and Cordis services as typed nodes, with
-dependency, provider, consumer, injection, and missing-provider relationships.
+The graph keeps DSH plugins and Cordis services primary by default instead of
+filling the canvas with every runtime instance. Selecting a plugin or filtering
+by Fiber status expands the relevant Fibers with ownership, parent, injection,
+and missing-provider relationships.
 
 ![DSH and Cordis runtime relationship graph](docs/images/runtime-relationship-graph.png)
 
-Select a plugin to inspect its runtime identity and neighborhood, or filter the
-graph down to every registered service node.
+Select a plugin to inspect its runtime identity, neighborhood, and owned Fibers.
+Fiber status cards now locate the exact pending, active, disposed, or failed
+instances instead of falling back to a plugin-status filter.
 
 <a href="docs/images/runtime-node-inspector.png"><img src="docs/images/runtime-node-inspector.png" width="49%" alt="Focused plugin node and runtime inspector"></a>
 <a href="docs/images/runtime-service-filter.png"><img src="docs/images/runtime-service-filter.png" width="49%" alt="All registered Cordis service nodes"></a>

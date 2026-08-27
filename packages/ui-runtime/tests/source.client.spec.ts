@@ -3,7 +3,7 @@ import type { RuntimeExplorerSnapshot } from '@deepseek-ai/dsh-api-remotes/clien
 import { createRuntimeSource } from '../src/client/source.ts'
 
 const snapshot = (observedAt: number, refreshIntervalMs = 500): RuntimeExplorerSnapshot => ({
-  schemaVersion: 5,
+  schemaVersion: 6,
   bootId: 'fixture-boot',
   snapshotSeq: observedAt,
   profile: 'fixture-web',
@@ -21,14 +21,20 @@ const snapshot = (observedAt: number, refreshIntervalMs = 500): RuntimeExplorerS
     },
   },
   effectActivity: {
-    windowMs: 300_000, availableSince: observedAt, complete: true, droppedTransitions: 0,
-    current: 0, created: 0, disposed: 0, delta: 0, churn: 0, plugins: [], recent: [],
+    windowMs: 300_000, availableSince: 1, complete: true, droppedTransitions: 0,
+    current: 1, created: 0, disposed: 0, delta: 0, churn: 0,
+    plugins: [{
+      pluginId: 'fixture-plugin', entryId: 'fixture-entry', moduleName: 'fixture-module', label: 'Fixture',
+      current: 1, created: 0, disposed: 0, delta: 0, churn: 0,
+      trend: [{ time: observedAt, current: 1, created: 0, disposed: 0 }],
+    }],
+    recent: [],
   },
-  graph: { nodes: [], edges: [], services: [], serviceRelations: [] },
+  graph: { nodes: [], edges: [], fibers: [], services: [], serviceRelations: [] },
   trace: [],
   capabilities: {
-    fiberInstances: false,
-    ownershipEdges: false,
+    fiberInstances: true,
+    ownershipEdges: true,
     scopes: false,
     lifecycleTransitions: true,
     turnPluginAttribution: false,
@@ -71,6 +77,35 @@ describe('runtime Remote source', () => {
     expect(read).toHaveBeenCalledTimes(2)
     expect(listener).toHaveBeenCalled()
     off()
+    source.dispose()
+  })
+
+  it('backs off unchanged runtime truth and preserves heavy section identities across clock-only polls', async () => {
+    vi.useFakeTimers()
+    const read = vi.fn<() => Promise<RuntimeExplorerSnapshot>>()
+      .mockResolvedValueOnce(snapshot(1))
+      .mockResolvedValueOnce(snapshot(2))
+      .mockResolvedValueOnce(snapshot(3))
+      .mockResolvedValueOnce(snapshot(4))
+    const source = createRuntimeSource(read, vi.fn())
+
+    source.setActive(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(source.getSnapshot().data?.snapshotSeq).toBe(1)
+    const first = source.getSnapshot().data!
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(source.getSnapshot().data?.graph).toBe(first.graph)
+    expect(source.getSnapshot().data?.trace).toBe(first.trace)
+    expect(source.getSnapshot().data?.effectActivity).toBe(first.effectActivity)
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(read).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(read).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(read).toHaveBeenCalledTimes(4)
     source.dispose()
   })
 

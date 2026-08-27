@@ -27,7 +27,11 @@ export function RuntimeOverview({
   overview: RuntimeOverviewSnapshot
   activity: RuntimeEffectActivitySnapshot
   t: (key: RuntimeLocaleKey) => string
-  onInspect?: (category: RuntimePluginCategory | undefined, status: RuntimeOverviewStatus) => void
+  onInspect?: (
+    kind: 'plugin' | 'fiber' | 'service',
+    category: RuntimePluginCategory | undefined,
+    status: RuntimeOverviewStatus,
+  ) => void
 }) {
   const values: Record<typeof METRICS[number], number> = {
     turns: overview.turns,
@@ -81,6 +85,7 @@ export function RuntimeOverview({
       <RuntimeActivity activity={activity} t={t} />
       <div className={css.overviewDistributions}>
         <RuntimeStatusCard
+          kind="plugin"
           title={t('loaderTitle')}
           unit={t('pluginsUnit')}
           chartTitle={t('pluginsByType')}
@@ -89,6 +94,7 @@ export function RuntimeOverview({
           onInspect={onInspect}
         />
         <RuntimeStatusCard
+          kind="fiber"
           title={t('fibers')}
           unit={t('fibersUnit')}
           chartTitle={t('fibersByPluginType')}
@@ -97,6 +103,7 @@ export function RuntimeOverview({
           onInspect={onInspect}
         />
         <RuntimeStatusCard
+          kind="service"
           title={t('servicesTitle')}
           unit={t('serviceNamesUnit')}
           chartTitle={t('servicesByProviderType')}
