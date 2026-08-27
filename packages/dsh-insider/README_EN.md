@@ -15,4 +15,4 @@ dsh plugin --profile web add @howardchan/dsh-insider
 When upgrading, remove `@howardchan/dsh-runtime` before installing
 `@howardchan/dsh-insider`. Saved graph layouts remain compatible.
 
-The current `0.1.5` build targets the DSH `0.1.0-rc.8` package family.
+The current `0.1.6` build targets the DSH `0.1.0-rc.8` package family.
