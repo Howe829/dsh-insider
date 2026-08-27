@@ -129,6 +129,20 @@ describe('G6 runtime graph projection', () => {
     expect(focused.edges.map(item => runtimeG6EdgeMetadata(item).kind)).toEqual(['provides', 'injects'])
   })
 
+  it('lets an exact Service focus override the show-all Services category', () => {
+    const unrelatedService: RuntimeGraphServiceNode = {
+      id: 'service-storage', name: 'storage', providerNodeId: 'storage-provider',
+      providerEntryId: 'storage-provider-entry', phase: 'active',
+    }
+    const focused = buildRuntimeG6Data(
+      [node('provider'), node('consumer')], [edge('consumer', 'provider', 'llm')],
+      [], [service, unrelatedService], [serviceRelation], relations,
+      { kind: 'service', id: service.id }, {}, true,
+    )
+    expect(focused.nodes.filter(item => runtimeG6NodeMetadata(item).kind === 'service').map(item => item.id))
+      .toEqual(['service:service-llm'])
+  })
+
   it('materializes owned Fiber instances on demand with parent and missing-service diagnostics', () => {
     const rootFiber = fiber('boot:10', 10, 'active', { entryRoot: true })
     const pendingFiber = fiber('boot:11', 11, 'pending', {

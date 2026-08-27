@@ -285,7 +285,7 @@ export function buildRuntimeG6Data(nodes, edges, fibers, services, serviceRelati
         }
     }
     const serviceById = new Map(services.map(service => [service.id, service]));
-    const visibleServiceIds = new Set(showAllServices
+    const visibleServiceIds = new Set(showAllServices && selectedServiceId === undefined
         ? services.map(service => service.id)
         : focusedServiceRelations.map(relation => relation.serviceNodeId));
     const consumerCounts = new Map();

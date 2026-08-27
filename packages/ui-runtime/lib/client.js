@@ -5535,7 +5535,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
 				});
 			}
 			const serviceById = new Map(services.map((service) => [service.id, service]));
-			const visibleServiceIds = new Set(showAllServices ? services.map((service) => service.id) : focusedServiceRelations.map((relation) => relation.serviceNodeId));
+			const visibleServiceIds = new Set(showAllServices && selectedServiceId === void 0 ? services.map((service) => service.id) : focusedServiceRelations.map((relation) => relation.serviceNodeId));
 			const consumerCounts = /* @__PURE__ */ new Map();
 			for (const relation of serviceRelations) consumerCounts.set(relation.serviceNodeId, (consumerCounts.get(relation.serviceNodeId) ?? 0) + 1);
 			for (const serviceId of visibleServiceIds) {
