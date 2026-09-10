@@ -21,10 +21,18 @@ not need to be copied into Harness.
 
 ## Compatibility boundary
 
-Version `0.1.0` was validated against the local DSH `0.1.0-rc.8` package
-family. npm currently exposes only the older `0.0.1-rc.1` DSH family, so the
-public installation command above is a release target, not a claim that the
-older family is compatible.
+The current fix was verified in the native DSH Desktop `2.2.0-rc.1` window
+(DSH package family `0.1.5-rc.1`). That platform removed
+`@deepseek-ai/dsh-client-runtime/client`. The plugin now imports the platform's
+`@deepseek-ai/dsh-client-store` and uses Cordis `Context` for client types.
+The store is a platform module, not a client plugin: do not add it to
+`dsh.client.inject`. This fix requires the new store entry and does not support
+platforms exposing only the old runtime entry.
+
+`npm run verify` executes the shipped client module factory and exercises
+opening, service selection, switching to tracing, and closing with the real
+store engine. Its module table excludes the deleted runtime entry, so the old
+bundle fails this regression test.
 
 The Web client mounts its own generated `runtimeExplorer` Remote contribution
 when no compatible aggregate has already mounted it. This keeps existing

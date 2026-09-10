@@ -75,17 +75,15 @@ contribution, and Bundle patch.
 
 ## Current development baseline
 
-Version 0.1.0 was extracted from DeepSeek Harness commit `141eb6fef8` and was
-validated against the local Harness `0.1.0-rc.8` package family. npm currently
-exposes only the older `0.0.1-rc.1` DSH family, so source builds and tests must
-run in a sibling checkout of the matching Harness baseline for now. The
-prebuilt `lib/` artifacts and assembled public package keep the repository
-inspectable and packable. The DSH peers remain optional because the selected
-profile supplies them at runtime; installation still requires a compatible
-DSH `0.1.0-rc.8` family rather than the older public npm family.
+Version `0.1.8` was verified in native DSH Desktop `2.2.0-rc.1` (DSH package
+family `0.1.5-rc.1`). The client uses the platform-provided
+`@deepseek-ai/dsh-client-store`, replacing the removed runtime entry. Older
+platforms exposing only that runtime entry are no longer supported. DSH peers
+remain optional because the selected profile provides them.
 
-See [integration/README.md](integration/README.md) for the exact integration
-boundary.
+The repository ships prebuilt `lib/` artifacts. Bundle regression tests run
+locally; full source builds and browser suites require a matching Harness
+workspace. See [integration/README.md](integration/README.md).
 
 ## Verification
 

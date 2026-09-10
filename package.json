@@ -1,6 +1,6 @@
 {
   "name": "dsh-insider-workspace",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "Standalone source repository for the DSH Insider Runtime Explorer plugin",
   "license": "MIT",
@@ -19,6 +19,12 @@
     "pack:dry-run": "npm run assemble && npm pack --dry-run --cache ./artifacts/npm-cache ./packages/dsh-insider"
   },
   "devDependencies": {
-    "js-yaml": "^4.1.0"
+    "@deepseek-ai/dsh-client-store": "0.1.5-rc.1",
+    "immer": "^10.1.1",
+    "js-yaml": "^4.1.0",
+    "jsdom": "26.1.0",
+    "react": "^18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "~4.4.7"
   }
 }

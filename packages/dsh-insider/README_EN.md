@@ -15,4 +15,6 @@ dsh plugin --profile web add @howardchan/dsh-insider
 When upgrading, remove `@howardchan/dsh-runtime` before installing
 `@howardchan/dsh-insider`. Saved graph layouts remain compatible.
 
-The current `0.1.7` build targets the DSH `0.1.0-rc.8` package family.
+The `0.1.8` build was verified on DSH Desktop `2.2.0-rc.1` (DSH package family
+`0.1.5-rc.1`). It requires the platform-provided `@deepseek-ai/dsh-client-store`;
+platforms exposing only the old runtime entry are no longer supported.

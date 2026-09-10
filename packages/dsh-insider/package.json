@@ -1,6 +1,6 @@
 {
   "name": "@howardchan/dsh-insider",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "DSH Insider: an independent Runtime Explorer for DeepSeek Harness and Cordis",
   "keywords": [
     "deepseek",
@@ -70,7 +70,6 @@
     "client": {
       "inject": [
         "@deepseek-ai/dsh-api-remotes",
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-sidebar"
@@ -88,7 +87,7 @@
     "@deepseek-ai/dsh-api-remotes": ">=0.1.0-rc.8 <0.2.0",
     "@deepseek-ai/dsh-brand": ">=0.1.0-rc.8 <0.2.0",
     "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.8 <0.2.0",
-    "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.8 <0.2.0",
+    "@deepseek-ai/dsh-client-store": ">=0.1.5-rc.1 <0.2.0",
     "@deepseek-ai/dsh-client-ui-layout": ">=0.1.0-rc.8 <0.2.0",
     "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.8 <0.2.0",
     "@deepseek-ai/dsh-client-ui-sidebar": ">=0.1.0-rc.8 <0.2.0",
@@ -106,7 +105,7 @@
     "@deepseek-ai/dsh-api-remotes": { "optional": true },
     "@deepseek-ai/dsh-brand": { "optional": true },
     "@deepseek-ai/dsh-client-locale": { "optional": true },
-    "@deepseek-ai/dsh-client-runtime": { "optional": true },
+    "@deepseek-ai/dsh-client-store": { "optional": true },
     "@deepseek-ai/dsh-client-ui-layout": { "optional": true },
     "@deepseek-ai/dsh-client-ui-primitives": { "optional": true },
     "@deepseek-ai/dsh-client-ui-sidebar": { "optional": true },
