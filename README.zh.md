@@ -64,14 +64,13 @@ dsh plugin --profile web add @howardchan/dsh-insider
 
 ## 当前开发基线
 
-首版 `0.1.0` 从 DeepSeek Harness 提交 `141eb6fef8` 抽取，并在本地 Harness
-`0.1.0-rc.8` 包族上验证。npm 当前公开的 DSH 包仍是较旧的
-`0.0.1-rc.1`，因此现阶段源码构建和测试需要在同级、同基线的 Harness
-仓库中执行。仓库包含已经验证的 `lib/` 构建产物和组装后的公开包；DSH peer
-依赖保持 optional，由所选 profile 在运行时提供。安装仍要求兼容的 DSH
-`0.1.0-rc.8` 包族，不能把旧的公开 npm 包族视为兼容版本。
+`0.1.8` 已在原生 DSH Desktop `2.2.0-rc.1`（DSH `0.1.5-rc.1` 包族）验证。
+客户端改用平台提供的 `@deepseek-ai/dsh-client-store`，替代已移除的 runtime
+入口；不再支持只有旧入口的平台。DSH peer 依赖保持 optional，由 Profile 提供。
 
-准确的接入边界见 [integration/README.zh.md](integration/README.zh.md)。
+仓库携带预构建 `lib/` 产物，Bundle 回归测试可独立运行；完整源码构建和浏览器
+测试仍需要匹配的 Harness 工作区。接入边界见
+[integration/README.zh.md](integration/README.zh.md)。
 
 ## 验证
 

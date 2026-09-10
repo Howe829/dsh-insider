@@ -19,8 +19,15 @@ dsh plugin --profile web add @howardchan/dsh-insider
 
 ## 兼容边界
 
-`0.1.0` 已在本地 DSH `0.1.0-rc.8` 包族上验证。npm 当前公开的仍是较旧的
-`0.0.1-rc.1` 包族，因此上面的公开安装命令是发布目标，不代表旧包族兼容。
+当前修复已在 DSH Desktop `2.2.0-rc.1`（DSH 包族 `0.1.5-rc.1`）的原生窗口验证。
+新版已移除 `@deepseek-ai/dsh-client-runtime/client`；状态存储使用平台提供的
+`@deepseek-ai/dsh-client-store`，客户端上下文类型使用 Cordis `Context`。
+`dsh.client.inject` 仅声明客户端插件，不能把无客户端入口的 store 包加入其中。
+此修复需要提供新 store 入口的 DSH，不再支持只有旧 runtime 入口的版本。
+
+`npm run verify` 会执行公开客户端 Bundle 的模块工厂，并使用真实 store 引擎验证
+打开、服务选择、切换追踪页和关闭操作。测试模块表不提供已删除的 runtime 入口，
+因此旧 Bundle 会在该回归测试中失败。
 
 如果现有聚合层尚未挂载兼容服务，Web 客户端会自行挂载生成的
 `runtimeExplorer` Remote contribution。这样既兼容现有 Harness 组装，也不再

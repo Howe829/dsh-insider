@@ -1,6 +1,6 @@
 /** Shared viewing state for the sidebar action and frame overlay. */
 
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-runtime/client'
+import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { RuntimePluginCategory } from '@deepseek-ai/dsh-api-remotes/client'
 import type { RuntimeLifecycleStatus } from './graph.ts'
 import type { RuntimeG6NodeCategory } from './g6-graph.ts'

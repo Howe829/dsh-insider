@@ -4,6 +4,12 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { load } from 'js-yaml'
+import { runInContext } from 'node:vm'
+import { JSDOM } from 'jsdom'
+import * as React from 'react'
+import * as ReactDOM from 'react-dom'
+import * as jsxRuntime from 'react/jsx-runtime'
+import * as clientStore from '@deepseek-ai/dsh-client-store'
 
 const root = resolve(import.meta.dirname, '..')
 const packageRoot = resolve(root, 'packages/dsh-insider')
@@ -11,6 +17,44 @@ const packageRoot = resolve(root, 'packages/dsh-insider')
 async function text(path) {
   return readFile(resolve(packageRoot, path), 'utf8')
 }
+
+test('Desktop 2.2 module table loads the shipped client and drives its shared viewing store', async (t) => {
+  let entry
+  const dom = new JSDOM('', { url: 'http://localhost', runScripts: 'outside-only' })
+  t.after(() => dom.window.close())
+  dom.window.__ModuleLoader__ = { load: (value) => { entry = value } }
+  runInContext(await text('lib/client.js'), dom.getInternalVMContext())
+  const modules = new Map([
+    ['react', React],
+    ['react-dom', ReactDOM],
+    ['react/jsx-runtime', jsxRuntime],
+    ['@deepseek-ai/dsh-client-store', clientStore],
+    // Components are registered but not rendered in this module-loading test.
+    ['@deepseek-ai/dsh-client-ui-primitives', {}],
+  ])
+  const client = entry.factory((id) => {
+    assert.ok(modules.has(id), `Desktop module table has no ${id}`)
+    return modules.get(id)
+  })
+  assert.equal(entry.id, '@howardchan/dsh-insider')
+  assert.equal(typeof client.apply, 'function')
+  const store = client.createRuntimeStore().create()
+  store.actions.setOpen(true)
+  store.actions.setCategory('service')
+  store.actions.select({ kind: 'service', id: 'remote.runtimeExplorer' })
+  assert.equal(store.getSnapshot().open, true)
+  assert.equal(store.getSnapshot().category, 'service')
+  assert.equal(store.getSnapshot().selection.id, 'remote.runtimeExplorer')
+  store.actions.setTab('trace')
+  assert.equal(store.getSnapshot().tab, 'trace')
+  assert.equal(store.getSnapshot().selection, undefined)
+  assert.equal(store.getSnapshot().category, 'all')
+  store.actions.setOpen(false)
+  assert.equal(store.getSnapshot().open, false)
+  const manifest = JSON.parse(await text('package.json'))
+  assert.ok(!manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'))
+  assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-client-runtime'], undefined)
+})
 
 test('ships one dual-face package and one Loader row', async () => {
   const manifest = JSON.parse(await text('package.json'))

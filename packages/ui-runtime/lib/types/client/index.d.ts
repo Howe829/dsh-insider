@@ -1,5 +1,5 @@
 /** DSH Insider sidebar entry and frame overlay assembly. */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client';
+import type { Context as ClientContext } from '@deepseek-ai/cordis';
 import { type RuntimeLocaleKey } from './locales.ts';
 export type { RuntimeLocaleKey } from './locales.ts';
 export type { RuntimeLifecycleStatus } from './graph.ts';
